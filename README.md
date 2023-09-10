@@ -16,6 +16,12 @@ The focus is on providing a high level index of data that is useful for building
 
 This project serves as the index-hydrator for my own projects, and will be updated as contributers and myself see fit. Doesn't do something you need? Dig in and open a PR, or create an issue that describes your feature request.
 
+## Building ##
+
+1. `cargo build --all-features --release`
+2. `cargo deb`
+3. Use dpkg to install Era using the output from #2
+
 ## Redis
 
 The codebase supports other backends, but development is focused on creating high-availability, read-optimized caches in Redis.
