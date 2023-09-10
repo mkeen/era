@@ -1,0 +1,57 @@
+[source]
+type = "N2N"
+address = "127.0.0.1:3001"
+
+[enrich]
+type = "Sled"
+db_path = "/data/era/sled_db"
+consumed_ring_path = "/data/era/all_consumed"
+
+[blocks]
+db_path = "/data/era/block_buffer"
+rollback_db_path = "/data/era/rollback_buffer"
+
+[storage]
+type = "Redis"
+connection_params = "redis://127.0.0.1:6379/3"
+cursor_key = "_cursor1"
+
+[[reducers]]
+type = "AssetMetadata"
+projection = "Json"
+historical_metadata = true
+policy_asset_index = true
+royalty_metatada = true
+
+[[reducers]]
+type = "AdaHandle"
+key_prefix = "h"
+policy_id_hex = "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a"
+
+[[reducers]]
+type = "PolicyAssetsMoved"
+key_prefix = "p"
+
+# This reflects the last block touched.. whether rolling forward or rolling back
+[[reducers]]
+type = "Parameters"
+key_prefix = "pr"
+
+[[reducers]]
+type = "UtxoOwners"
+key_prefix = "tx"
+coin_key_prefix = "c"
+
+[[reducers]]
+type = "UtxoByAddress"
+key_prefix = "tx"
+coin_key_prefix = "c"
+
+[[reducers]]
+type = "MultiAssetBalances"
+
+[intersect]
+type = "Origin"
+
+[policy]
+missing_data = "Skip"

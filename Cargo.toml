@@ -1,0 +1,72 @@
+[package]
+name = "era"
+description = "Hydrate a high-level, real-time, read-optimized cache of Cardano on-chain state with Era"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/mkeen/era"
+homepage = "https://github.com/mkeen/era"
+documentation = "https://docs.rs/era"
+license = "Apache-2.0"
+readme = "README.md"
+authors = ["Santiago Carmuega <santiago@carmuega.me>", "Mike Keen <mwk@mikekeen.com>"]
+
+[package.metadata.deb]
+maintainer = "Mike Keen <mwk@mikekeen.com>"
+copyright = "2023 Drex Labs <https://drexlabs.ai>"
+license-file = ["LICENSE", "4"]
+extended-description = """\
+A high-level, real-time blockchain indexer for Cardano and Redis"""
+depends = ""
+section = "Developer Tools"
+priority = "optional"
+assets = [
+    ["target/release/era", "usr/bin/", "755"],
+    ["scripts/systemd.service", "etc/systemd/system/era.service", "644"],
+    ["config.toml", "etc/era/config.toml", "644"]
+]
+
+[dependencies]
+pallas = "0.17.0"
+hex = "0.4.3"
+net2 = "0.2.37"
+blake2 = "0.10.6"
+bech32 = "0.8.1"
+clap = { version = "3.2.6", features = ["derive"] }
+log = "0.4.14"
+env_logger = "0.9.0"
+merge = "0.1.0"
+config = { version = "0.13.0", default-features = false, features = [
+    "toml",
+    "json",
+] }
+serde = { version = "1.0.136", features = ["derive"] }
+serde_json = "1.0.79"
+minicbor = "0.14.1"
+prometheus_exporter = { version = "0.8.4", default-features = false }
+gasket = { git = "https://github.com/construkts/gasket-rs.git" }
+thiserror = "1.0.30"
+redis = "0.21.5"
+sled = "0.34.7"
+lazy_static = "1.4.0"
+rayon = "1.5.3"
+
+# async feature
+futures = { version = "0.3.24", optional = true }
+tokio = { version = "1.21.1", features = ["full"], optional = true }
+tokio-util = "0.7.8"
+
+# elastic feature
+elasticsearch = { version = "8.5.0-alpha.1", optional = true }
+
+# tui feature
+indicatif = { version = "0.17.0-rc.11", optional = true }
+
+# required for CI to complete successfully
+openssl = { version = "0.10", optional = true, features = ["vendored"] }
+
+[features]
+async = ["futures", "tokio"]
+elastic = ["elasticsearch", "async", "openssl"]
+unstable = ["elastic"]
+tui = ["indicatif"]
+default = ["tui"]
