@@ -1,5 +1,5 @@
 <div align="center">
-    <img src="./assets/128x128.png" alt="Era Logo" width="128">
+    <img src="./assets/128x128@2x.png" alt="Era Logo" width="128">
     <hr />
         <h3 align="center" style="border-bottom: none">Read-optimized cache of Cardano on-chain entities</h3>
         <img alt="GitHub" src="https://img.shields.io/github/license/mkeen/era" />
