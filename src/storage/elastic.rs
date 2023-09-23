@@ -27,7 +27,7 @@ impl From<model::Value> for JsonValue {
             model::Value::Cbor(x) => json!(hex::encode(x)),
             model::Value::BigInt(x) => json!(x),
             model::Value::Json(x) => x,
-            model::Value::BigInt(x) => json!({ "value": x }),
+            // model::Value::BigInt(x) => json!({ "value": x }),
         }
     }
 }
@@ -136,7 +136,7 @@ fn recv_batch(input: &mut InputPort) -> Result<Batch, gasket::error::Error> {
         match input.recv_or_idle() {
             Ok(x) => match x.payload {
                 CRDTCommand::BlockStarting(_) => (),
-                CRDTCommand::BlockFinished(_) => {
+                CRDTCommand::BlockFinished(_, _) => {
                     batch.block_end = Some(x.payload);
                     return Ok(batch);
                 }
@@ -165,7 +165,7 @@ async fn apply_command(cmd: CRDTCommand, client: &Elasticsearch) -> Option<ESRes
             .send()
             .await
             .into(),
-        CRDTCommand::BlockFinished(_) => {
+        CRDTCommand::BlockFinished(_, _) => {
             log::warn!("Elasticsearch storage doesn't support cursors ATM");
             None
         }

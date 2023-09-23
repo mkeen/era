@@ -186,18 +186,22 @@ impl gasket::runtime::Worker for Worker {
             let pop_rollback_block = self.blocks.rollback_pop();
 
             if let Some(cbor) = pop_rollback_block {
-                let block = MultiEraBlock::decode(&cbor)
-                    .map_err(crate::Error::cbor)
-                    .apply_policy(&self.policy);
+                let length_after_pop = self.blocks.get_current_queue_depth();
 
-                if let Ok(block) = block {
-                    rolled_back = true;
-                    self.output
-                        .send(model::RawBlockPayload::roll_back(cbor.clone()))?;
-                    self.block_count.inc(1);
+                if let Some(older_sibling_cbor) = self.blocks.get_block_latest() {
+                    let previous_block = MultiEraBlock::decode(&older_sibling_cbor);
 
-                    if let Some(block) = block {
+                    if let Ok(block) = previous_block {
                         let last_point = Point::Specific(block.slot(), block.hash().to_vec());
+                        rolled_back = true;
+
+                        self.output.send(model::RawBlockPayload::roll_back(
+                            cbor.clone(),
+                            (last_point.clone(), block.number() as i64),
+                            length_after_pop == 0,
+                        ))?;
+
+                        self.block_count.inc(1);
 
                         if crosscut::should_finalize(&self.finalize, &last_point) {
                             return Ok(gasket::runtime::WorkOutcome::Done);

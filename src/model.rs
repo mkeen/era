@@ -10,7 +10,7 @@ use crate::prelude::*;
 #[derive(Debug, Clone)]
 pub enum RawBlockPayload {
     RollForward(Vec<u8>),
-    RollBack(Vec<u8>),
+    RollBack(Vec<u8>, (Point, i64), bool),
 }
 
 impl RawBlockPayload {
@@ -20,9 +20,13 @@ impl RawBlockPayload {
         }
     }
 
-    pub fn roll_back(block: Vec<u8>) -> gasket::messaging::Message<Self> {
+    pub fn roll_back(
+        block: Vec<u8>,
+        last_good_block_info: (Point, i64),
+        finalize: bool,
+    ) -> gasket::messaging::Message<Self> {
         gasket::messaging::Message {
-            payload: Self::RollBack(block),
+            payload: Self::RollBack(block, last_good_block_info, finalize),
         }
     }
 }
@@ -59,7 +63,7 @@ impl BlockContext {
             .consumes()
             .iter()
             .map(|i| i.output_ref())
-            .map(|r| self.find_utxo(&r).map(|u| (r,u)))
+            .map(|r| self.find_utxo(&r).map(|u| (r, u)))
             .map(|r| r.apply_policy(policy))
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
@@ -73,7 +77,7 @@ impl BlockContext {
 #[derive(Debug, Clone)]
 pub enum EnrichedBlockPayload {
     RollForward(Vec<u8>, BlockContext),
-    RollBack(Vec<u8>, BlockContext),
+    RollBack(Vec<u8>, BlockContext, (Point, i64), bool),
 }
 
 impl EnrichedBlockPayload {
@@ -83,9 +87,14 @@ impl EnrichedBlockPayload {
         }
     }
 
-    pub fn roll_back(block: Vec<u8>, ctx: BlockContext) -> gasket::messaging::Message<Self> {
+    pub fn roll_back(
+        block: Vec<u8>,
+        ctx: BlockContext,
+        last_good_block_info: (Point, i64),
+        final_block_in_batch: bool,
+    ) -> gasket::messaging::Message<Self> {
         gasket::messaging::Message {
-            payload: Self::RollBack(block, ctx),
+            payload: Self::RollBack(block, ctx, last_good_block_info, final_block_in_batch),
         }
     }
 }
@@ -130,19 +139,19 @@ pub enum CRDTCommand {
     SetRemove(Set, Member),
     SortedSetAdd(Set, Member, Delta),
     SortedSetRemove(Set, Member, Delta),
-    TwoPhaseSetAdd(Set, Member),
-    TwoPhaseSetRemove(Set, Member),
+    SortedSetMemberRemove(Set, Member),
     GrowOnlySetAdd(Set, Member),
     LastWriteWins(Key, Value, Timestamp),
     AnyWriteWins(Key, Value),
     // TODO make sure Value is a generic not stringly typed
+    Spoil(Key),
     PNCounter(Key, Delta),
     HashCounter(Key, Member, Delta),
     HashSetValue(Key, Member, Value),
     HashSetMulti(Key, Vec<Member>, Vec<Value>),
     HashUnsetKey(Key, Member),
     UnsetKey(Key),
-    BlockFinished(Point),
+    BlockFinished(Point, bool),
 }
 
 impl CRDTCommand {
@@ -199,6 +208,19 @@ impl CRDTCommand {
         CRDTCommand::SortedSetRemove(key, member, delta)
     }
 
+    pub fn sorted_set_member_remove(
+        prefix: Option<&str>,
+        key: &str,
+        member: String,
+    ) -> CRDTCommand {
+        let key = match prefix {
+            Some(prefix) => format!("{}.{}", prefix, key),
+            None => key.to_string(),
+        };
+
+        CRDTCommand::SortedSetMemberRemove(key, member)
+    }
+
     pub fn any_write_wins<K, V>(prefix: Option<&str>, key: K, value: V) -> CRDTCommand
     where
         K: ToString,
@@ -210,6 +232,18 @@ impl CRDTCommand {
         };
 
         CRDTCommand::AnyWriteWins(key, value.into())
+    }
+
+    pub fn spoil<K>(prefix: Option<&str>, key: K) -> CRDTCommand
+    where
+        K: ToString,
+    {
+        let key = match prefix {
+            Some(prefix) => format!("{}.{}", prefix, key.to_string()),
+            None => key.to_string(),
+        };
+
+        CRDTCommand::Spoil(key)
     }
 
     pub fn last_write_wins<V>(
@@ -235,8 +269,8 @@ impl CRDTCommand {
         member: String,
         value: V,
     ) -> CRDTCommand
-        where
-            V: Into<Value>,
+    where
+        V: Into<Value>,
     {
         let key = match prefix {
             Some(prefix) => format!("{}.{}", prefix, key.to_string()),
@@ -278,10 +312,7 @@ impl CRDTCommand {
         CRDTCommand::HashCounter(key, member, delta)
     }
 
-    pub fn block_finished(block: &MultiEraBlock) -> CRDTCommand {
-        let hash = block.hash();
-        let slot = block.slot();
-        let point = Point::Specific(slot, hash.to_vec());
-        CRDTCommand::BlockFinished(point)
+    pub fn block_finished(point: Point, finalize: bool) -> CRDTCommand {
+        CRDTCommand::BlockFinished(point, finalize)
     }
 }

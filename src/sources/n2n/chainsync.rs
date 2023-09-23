@@ -16,7 +16,7 @@ fn to_traverse<'b>(header: &'b HeaderContent) -> Result<MultiEraHeader<'b>, Erro
         header.byron_prefix.map(|x| x.0),
         &header.cbor,
     )
-        .map_err(Error::cbor)
+    .map_err(Error::cbor)
 }
 
 pub type OutputPort = gasket::messaging::OutputPort<model::RawBlockPayload>;
@@ -196,22 +196,31 @@ impl gasket::runtime::Worker for Worker {
         loop {
             let pop_rollback_block = self.blocks.rollback_pop();
 
-            if let Some(cbor) = pop_rollback_block {
-                let block = MultiEraBlock::decode(&cbor)
-                    .map_err(crate::Error::cbor)
-                    .apply_policy(&self.policy);
+            if let Some(rollback_cbor) = pop_rollback_block {
+                if let Some(last_good_block) = self.blocks.get_block_latest() {
+                    if let Some(parsed_last_good_block) = MultiEraBlock::decode(&last_good_block)
+                        .map_err(crate::Error::cbor)
+                        .apply_policy(&self.policy)
+                        .unwrap()
+                    {
+                        rolled_back = true;
 
-                if let Ok(block) = block {
-                    rolled_back = true;
-                    self.output.send(model::RawBlockPayload::roll_back(cbor.clone()))?;
-                    self.block_count.inc(1);
+                        let point = Point::Specific(
+                            parsed_last_good_block.slot(),
+                            parsed_last_good_block.hash().to_vec(),
+                        );
 
-                    if let Some(block) = block {
-                        let last_point = Point::Specific(block.slot(), block.hash().to_vec());
+                        self.output.send(model::RawBlockPayload::roll_back(
+                            rollback_cbor,
+                            (point, parsed_last_good_block.number() as i64),
+                            self.blocks.get_current_queue_depth() == 0,
+                        ))?;
 
-                        if crosscut::should_finalize(&self.finalize, &last_point) {
-                            return Ok(gasket::runtime::WorkOutcome::Done);
-                        }
+                        self.block_count.inc(1);
+
+                        // if crosscut::should_finalize(&self.finalize, &last_point) {
+                        //     return Ok(gasket::runtime::WorkOutcome::Done);
+                        // }
                     }
                 }
             } else {
@@ -220,7 +229,7 @@ impl gasket::runtime::Worker for Worker {
         }
 
         if rolled_back {
-            return Ok(gasket::runtime::WorkOutcome::Partial)
+            return Ok(gasket::runtime::WorkOutcome::Partial);
         }
 
         match self.chainsync.as_ref().unwrap().has_agency() {
@@ -241,7 +250,8 @@ impl gasket::runtime::Worker for Worker {
 
             self.blocks.insert_block(&point, &block);
 
-            self.output.send(model::RawBlockPayload::roll_forward(block))?;
+            self.output
+                .send(model::RawBlockPayload::roll_forward(block))?;
 
             self.block_count.inc(1);
 
@@ -250,7 +260,6 @@ impl gasket::runtime::Worker for Worker {
             if crosscut::should_finalize(&self.finalize, &point) {
                 return Ok(gasket::runtime::WorkOutcome::Done);
             }
-
         }
 
         Ok(gasket::runtime::WorkOutcome::Partial)

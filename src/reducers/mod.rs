@@ -16,6 +16,7 @@ pub mod asset_metadata;
 pub mod multi_asset_balances;
 pub mod parameters;
 pub mod policy_assets_moved;
+pub mod stake_to_pool;
 pub mod utxo_by_address;
 pub mod utxo_owners;
 
@@ -31,6 +32,7 @@ pub enum Config {
     PolicyAssetsMoved(policy_assets_moved::Config),
     MultiAssetBalances(multi_asset_balances::Config),
     AdaHandle(ada_handle::Config),
+    StakeToPool(stake_to_pool::Config),
 }
 
 impl Config {
@@ -47,6 +49,7 @@ impl Config {
             Config::PolicyAssetsMoved(c) => c.plugin(chain, policy),
             Config::MultiAssetBalances(c) => c.plugin(chain, policy),
             Config::AdaHandle(c) => c.plugin(chain),
+            Config::StakeToPool(c) => c.plugin(),
         }
     }
 }
@@ -104,6 +107,7 @@ pub enum Reducer {
     PolicyAssetsMoved(policy_assets_moved::Reducer),
     MultiAssetBalances(multi_asset_balances::Reducer),
     AdaHandle(ada_handle::Reducer),
+    StakeToPool(stake_to_pool::Reducer),
 }
 
 impl Reducer {
@@ -122,6 +126,7 @@ impl Reducer {
             Reducer::PolicyAssetsMoved(x) => x.reduce_block(block, output),
             Reducer::MultiAssetBalances(x) => x.reduce_block(block, ctx, rollback, output),
             Reducer::AdaHandle(x) => x.reduce_block(block, ctx, rollback, output),
+            Reducer::StakeToPool(x) => x.reduce_block(block, rollback, output),
         }
     }
 }

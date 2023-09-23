@@ -88,42 +88,42 @@ impl gasket::runtime::Worker for Worker {
             model::CRDTCommand::BlockStarting(point) => {
                 log::debug!("block started {:?}", point);
             }
-            model::CRDTCommand::GrowOnlySetAdd(key, value) => {
-                log::debug!("adding to grow-only set [{}], value [{}]", key, value);
+            model::CRDTCommand::GrowOnlySetAdd(key, member) => {
+                log::debug!("adding to grow-only set [{}], member [{}]", key, member);
             }
-            model::CRDTCommand::TwoPhaseSetAdd(key, value) => {
-                log::debug!("adding to 2-phase set [{}], value [{}]", key, value);
+            model::CRDTCommand::SetAdd(key, member) => {
+                log::debug!("adding to set [{}], member [{}]", key, member);
             }
-            model::CRDTCommand::TwoPhaseSetRemove(key, value) => {
-                log::debug!("removing from 2-phase set [{}], value [{}]", key, value);
-            }
-            model::CRDTCommand::SetAdd(key, value) => {
-                log::debug!("adding to set [{}], value [{}]", key, value);
-            }
-            model::CRDTCommand::SortedSetAdd(key, value, delta) => {
+            model::CRDTCommand::SortedSetAdd(key, member, delta) => {
                 log::debug!(
-                    "adding to set [{}], value [{}], delta [{}]",
+                    "adding to set [{}], member [{}], delta [{}]",
                     key,
-                    value,
+                    member,
                     delta
                 );
             }
-            model::CRDTCommand::SortedSetRemove(key, value, delta) => {
+            model::CRDTCommand::SortedSetRemove(key, member, delta) => {
                 log::debug!(
-                    "removing from set [{}], value [{}], delta [{}]",
+                    "removing from set [{}], member [{}], delta [{}]",
                     key,
-                    value,
+                    member,
                     delta
                 );
             }
-            model::CRDTCommand::SetRemove(key, value) => {
-                log::debug!("removing from set [{}], value [{}]", key, value);
+            model::CRDTCommand::SortedSetMemberRemove(key, member) => {
+                log::debug!("removing from set [{}], member [{}]", key, member);
+            }
+            model::CRDTCommand::SetRemove(key, member) => {
+                log::debug!("removing from set [{}], member [{}]", key, member);
             }
             model::CRDTCommand::LastWriteWins(key, _, ts) => {
                 log::debug!("last write for [{}], slot [{}]", key, ts);
             }
             model::CRDTCommand::AnyWriteWins(key, _) => {
                 log::debug!("overwrite [{}]", key);
+            }
+            model::CRDTCommand::Spoil(key) => {
+                log::debug!("spoil [{}]", key);
             }
             model::CRDTCommand::PNCounter(key, value) => {
                 log::debug!("increasing counter [{}], by [{}]", key, value);
@@ -148,10 +148,8 @@ impl gasket::runtime::Worker for Worker {
             model::CRDTCommand::UnsetKey(key) => {
                 log::debug!("deleting key {}", key);
             }
-            model::CRDTCommand::BlockFinished(point) => {
-                log::debug!("block finished {:?}", point);
-                let mut last_point = self.last_point.lock().unwrap();
-                *last_point = Some(crosscut::PointArg::from(point));
+            model::CRDTCommand::BlockFinished(point, finalize) => {
+                log::debug!("block finished {:?} {}", point, finalize);
             }
         };
 

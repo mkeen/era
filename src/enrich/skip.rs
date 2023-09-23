@@ -70,12 +70,17 @@ impl gasket::runtime::Worker for Worker {
                     BlockContext::default(),
                 ))?;
             }
-            model::RawBlockPayload::RollBack(cbor) => {
-                self.output
-                    .send(model::EnrichedBlockPayload::roll_back(
-                        cbor,
-                        BlockContext::default()
-                    ))?;
+            model::RawBlockPayload::RollBack(
+                cbor,
+                last_good_block_info_rollback,
+                last_rollback_for_batch,
+            ) => {
+                self.output.send(model::EnrichedBlockPayload::roll_back(
+                    cbor,
+                    BlockContext::default(),
+                    last_good_block_info_rollback,
+                    last_rollback_for_batch,
+                ))?;
             }
         };
 

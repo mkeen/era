@@ -5,15 +5,14 @@ After=multi-user.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/era daemon --config /etc/era/config.toml
-KillSignal="SIGINT"
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=scrolls
+SyslogIdentifier=era
 Environment=RUST_LOG=WARN
 LimitNOFILE=120000
 Restart=on-failure
-RestartSec=30s
-WorkingDirectory=~
+RestartSec=60s
+WorkingDirectory=/
 User=root
 Group=root
 

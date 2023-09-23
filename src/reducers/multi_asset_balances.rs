@@ -1,5 +1,5 @@
-use pallas::ledger::traverse::{Asset, MultiEraInput, MultiEraOutput};
 use pallas::ledger::traverse::MultiEraBlock;
+use pallas::ledger::traverse::{Asset, MultiEraInput, MultiEraOutput};
 use serde::{Deserialize, Serialize};
 
 use crate::{crosscut, model, prelude::*};
@@ -39,9 +39,7 @@ pub struct Config {
     pub filter: Option<crosscut::filters::Predicate>,
 }
 
-fn asset_fingerprint(
-    data_list: [&str; 2],
-) -> Result<String, bech32::Error> {
+fn asset_fingerprint(data_list: [&str; 2]) -> Result<String, bech32::Error> {
     let combined_parts = data_list.join("");
     let raw = hex::decode(combined_parts).unwrap();
     let mut hasher = Blake2bVar::new(20).unwrap();
@@ -70,7 +68,6 @@ impl Reducer {
             Address::Byron(_) => address.to_bech32().unwrap_or(address.to_string()),
             Address::Stake(stake) => stake.to_bech32().unwrap_or(address.to_string()),
         }
-
     }
 
     fn calculate_address_asset_balance_offsets(
@@ -81,41 +78,44 @@ impl Reducer {
         spending: bool,
     ) -> (
         HashMap<String, HashMap<String, i64>>,
-        HashMap<String, HashMap<String, Vec<(String, i64)>>>
+        HashMap<String, HashMap<String, Vec<(String, i64)>>>,
     ) {
         let mut fingerprint_tallies: HashMap<String, HashMap<String, i64>> = HashMap::new();
-        let mut policy_asset_owners: HashMap<String, HashMap<String, Vec<(String, i64)>>> = HashMap::new();
+        let mut policy_asset_owners: HashMap<String, HashMap<String, Vec<(String, i64)>>> =
+            HashMap::new();
 
         for asset in assets.clone() {
             if let Asset::NativeAsset(policy_id, asset_name, quantity) = asset {
                 let asset_name = hex::encode(asset_name);
 
-                if let Ok(fingerprint) = asset_fingerprint([policy_id.clone().to_string().as_str(), asset_name.as_str()]) {
+                if let Ok(fingerprint) =
+                    asset_fingerprint([policy_id.clone().to_string().as_str(), asset_name.as_str()])
+                {
                     if !fingerprint.is_empty() {
                         let adjusted_quantity: i64 = match spending {
                             true => -(quantity as i64),
-                            false => quantity as i64
+                            false => quantity as i64,
                         };
 
-                        *fingerprint_tallies.entry(address.clone())
+                        *fingerprint_tallies
+                            .entry(address.clone())
                             .or_insert(HashMap::new())
                             .entry(fingerprint.clone())
                             .or_insert(0_i64) += adjusted_quantity;
 
-                        policy_asset_owners.entry(policy_id.clone().to_string())
+                        policy_asset_owners
+                            .entry(policy_id.clone().to_string())
                             .or_insert(HashMap::new())
                             .entry(fingerprint)
                             .or_insert(Vec::new())
                             .push((address.clone(), adjusted_quantity));
                     }
-
                 }
-
             };
-
         }
 
-        *fingerprint_tallies.entry(address.to_string())
+        *fingerprint_tallies
+            .entry(address.to_string())
             .or_insert(HashMap::new())
             .entry("lovelace".to_string())
             .or_insert(0) += lovelace;
@@ -134,15 +134,11 @@ impl Reducer {
     ) -> Result<(), gasket::error::Error> {
         let adjusted_lovelace = match spending {
             true => -(lovelace as i64),
-            false => lovelace as i64
+            false => lovelace as i64,
         };
 
-        let (fingerprint_tallies, policy_asset_owners) = self.calculate_address_asset_balance_offsets(
-            soa,
-            adjusted_lovelace,
-            assets,
-            spending
-        );
+        let (fingerprint_tallies, policy_asset_owners) =
+            self.calculate_address_asset_balance_offsets(soa, adjusted_lovelace, assets, spending);
 
         let prefix = self.config.key_prefix.clone().unwrap_or("w".to_string());
 
@@ -150,58 +146,54 @@ impl Reducer {
             for (soa, quantity_map) in fingerprint_tallies.clone() {
                 for (fingerprint, quantity) in quantity_map {
                     if !fingerprint.is_empty() {
-                        let _ = output.send(
-                            gasket::messaging::Message::from(
-                                model::CRDTCommand::HashCounter(
-                                    format!("{}.{}", prefix, soa),
-                                    fingerprint.to_owned(),
-                                    quantity
-                                )
-
-                            )
-
-                        );
-
+                        let _ = output.send(gasket::messaging::Message::from(
+                            model::CRDTCommand::HashCounter(
+                                format!("{}.{}", prefix, soa),
+                                fingerprint.to_owned(),
+                                quantity,
+                            ),
+                        ));
                     }
-
                 }
 
-                let _ = output.send(gasket::messaging::Message::from(model::CRDTCommand::AnyWriteWins(
-                    format!("{}.l.{}", prefix, soa),
-                    self.time.slot_to_wallclock(slot).to_string().into(),
-                )));
-
+                let _ = output.send(gasket::messaging::Message::from(
+                    model::CRDTCommand::AnyWriteWins(
+                        format!("{}.l.{}", prefix, soa),
+                        self.time.slot_to_wallclock(slot).to_string().into(),
+                    ),
+                ));
             }
-
         }
 
         if !policy_asset_owners.is_empty() {
             for (policy_id, asset_to_owner) in policy_asset_owners {
-                output.send(gasket::messaging::Message::from(model::CRDTCommand::AnyWriteWins(
-                    format!("{}.lp.{}", prefix, policy_id),
-                    self.time.slot_to_wallclock(slot).to_string().into(),
-                )))?;
+                if spending {
+                    // i am editing here
+
+                    output.send(gasket::messaging::Message::from(
+                        model::CRDTCommand::AnyWriteWins(
+                            format!("{}.lp.{}", prefix, policy_id),
+                            self.time.slot_to_wallclock(slot).to_string().into(),
+                        ),
+                    ))?;
+                }
 
                 for (fingerprint, soas) in asset_to_owner {
                     for (soa, quantity) in soas {
                         if !soa.is_empty() {
                             if quantity != 0 {
-                                output.send(gasket::messaging::Message::from(model::CRDTCommand::HashCounter(
-                                    format!("{}.owned.{}", prefix, fingerprint),
-                                    soa.clone(),
-                                    quantity,
-                                )))?;
-
+                                output.send(gasket::messaging::Message::from(
+                                    model::CRDTCommand::HashCounter(
+                                        format!("{}.owned.{}", prefix, fingerprint),
+                                        soa.clone(),
+                                        quantity,
+                                    ),
+                                ))?;
                             }
-
                         }
-
                     }
-
                 }
-
             }
-
         }
 
         Ok(())
@@ -212,7 +204,7 @@ impl Reducer {
         output: &mut super::OutputPort,
         meo: &MultiEraOutput,
         slot: u64,
-	rollback: bool,
+        rollback: bool,
     ) -> Result<(), gasket::error::Error> {
         let received_to_soa = self.stake_or_address_from_address(&meo.address().unwrap());
 
@@ -222,9 +214,8 @@ impl Reducer {
             meo.lovelace_amount(),
             &meo.non_ada_assets(),
             rollback,
-            slot
+            slot,
         )
-
     }
 
     fn process_spent(
@@ -233,10 +224,11 @@ impl Reducer {
         mei: &MultiEraInput,
         ctx: &model::BlockContext,
         slot: u64,
-	rollback: bool,
+        rollback: bool,
     ) -> Result<(), gasket::error::Error> {
         if let Ok(spent_output) = ctx.find_utxo(&mei.output_ref()) {
-            let spent_from_soa = self.stake_or_address_from_address(&spent_output.address().unwrap());
+            let spent_from_soa =
+                self.stake_or_address_from_address(&spent_output.address().unwrap());
 
             return self.process_asset_movement(
                 output,
@@ -246,7 +238,6 @@ impl Reducer {
                 !rollback,
                 slot,
             );
-
         }
 
         Ok(())
@@ -263,18 +254,16 @@ impl Reducer {
 
         for tx in block.txs() {
             for consumes in tx.consumes().iter() {
-                let _ = self.process_spent(output, consumes, ctx, slot, rollback);
+                self.process_spent(output, consumes, ctx, slot, rollback);
             }
 
-            for (_, produces) in tx.produces().iter() {
-                let _ = self.process_received(output, produces, slot, rollback);
+            for (inputIndex, utxoProduced) in tx.produces().iter() {
+                let _ = self.process_received(output, utxoProduced, slot, rollback);
             }
-
         }
 
         Ok(())
     }
-
 }
 
 impl Config {
@@ -292,6 +281,4 @@ impl Config {
 
         super::Reducer::MultiAssetBalances(reducer)
     }
-
 }
-

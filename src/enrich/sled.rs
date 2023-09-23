@@ -360,7 +360,7 @@ impl gasket::runtime::Worker for Worker {
                     self.output
                         .send(model::EnrichedBlockPayload::roll_forward(cbor, ctx))?;
                 }
-                model::RawBlockPayload::RollBack(cbor) => {
+                model::RawBlockPayload::RollBack(cbor, last_known_block_info, finalize) => {
                     let block = MultiEraBlock::decode(&cbor)
                         .map_err(crate::Error::cbor)
                         .apply_policy(&self.policy);
@@ -382,8 +382,12 @@ impl gasket::runtime::Worker for Worker {
 
                             let ctx = self.par_fetch_referenced_utxos(db, &txs).or_restart()?;
 
-                            self.output
-                                .send(model::EnrichedBlockPayload::roll_back(cbor, ctx))?;
+                            self.output.send(model::EnrichedBlockPayload::roll_back(
+                                cbor,
+                                ctx,
+                                last_known_block_info,
+                                finalize,
+                            ))?;
                         }
                         Err(_) => return Ok(gasket::runtime::WorkOutcome::Partial),
                     }

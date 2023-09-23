@@ -1,4 +1,4 @@
-use pallas::ledger::traverse::MultiEraBlock;
+use pallas::{ledger::traverse::MultiEraBlock, network::miniprotocols::Point};
 
 use crate::{crosscut, model, prelude::*};
 
@@ -38,6 +38,8 @@ impl Worker {
         block: &'b Vec<u8>,
         rollback: bool,
         ctx: &model::BlockContext,
+        last_good_block_rollback_info: (Point, i64),
+        final_block_in_rollback_batch: bool,
     ) -> Result<(), gasket::error::Error> {
         let block = MultiEraBlock::decode(block)
             .map_err(crate::Error::cbor)
@@ -49,7 +51,15 @@ impl Worker {
             None => return Ok(()),
         };
 
-        self.last_block.set(block.number() as i64);
+        let (point, block_number) = match rollback {
+            true => last_good_block_rollback_info,
+            false => (
+                Point::Specific(block.slot(), block.hash().to_vec()),
+                block.number() as i64,
+            ),
+        };
+
+        self.last_block.set(block_number);
 
         self.output.send(gasket::messaging::Message::from(
             model::CRDTCommand::block_starting(&block),
@@ -61,12 +71,11 @@ impl Worker {
         }
 
         self.output.send(gasket::messaging::Message::from(
-            model::CRDTCommand::block_finished(&block),
+            model::CRDTCommand::block_finished(point, !rollback || final_block_in_rollback_batch),
         ))?;
 
         Ok(())
     }
-
 }
 
 impl gasket::runtime::Worker for Worker {
@@ -82,11 +91,20 @@ impl gasket::runtime::Worker for Worker {
 
         match msg.payload {
             model::EnrichedBlockPayload::RollForward(block, ctx) => {
-                self.reduce_block(&block, false, &ctx)?
+                self.reduce_block(&block, false, &ctx, (Point::Origin, 0), false)?
             }
-            model::EnrichedBlockPayload::RollBack(block, ctx) => {
-                self.reduce_block(&block, true, &ctx)?
-            }
+            model::EnrichedBlockPayload::RollBack(
+                block,
+                ctx,
+                last_block_rollback_info,
+                final_block_in_batch,
+            ) => self.reduce_block(
+                &block,
+                true,
+                &ctx,
+                last_block_rollback_info,
+                final_block_in_batch,
+            )?,
         }
 
         self.input.commit();

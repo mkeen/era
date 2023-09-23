@@ -138,92 +138,81 @@ impl gasket::runtime::Worker for Worker {
                     .query(self.connection.as_mut().unwrap())
                     .or_restart()?;
             }
-            model::CRDTCommand::GrowOnlySetAdd(key, value) => {
+            model::CRDTCommand::GrowOnlySetAdd(key, member) => {
                 self.connection
                     .as_mut()
                     .unwrap()
-                    .sadd(key, value)
+                    .sadd(key, member)
                     .or_restart()?;
             }
-            model::CRDTCommand::TwoPhaseSetAdd(key, value) => {
-                log::debug!("adding to 2-phase set [{}], value [{}]", key, value);
+            model::CRDTCommand::SetAdd(key, member) => {
+                log::debug!("adding to set [{}], value [{}]", key, member);
 
                 self.connection
                     .as_mut()
                     .unwrap()
-                    .sadd(key, value)
+                    .sadd(key, member)
                     .or_restart()?;
             }
-            model::CRDTCommand::TwoPhaseSetRemove(key, value) => {
-                log::debug!("removing from 2-phase set [{}], value [{}]", key, value);
+            model::CRDTCommand::SetRemove(key, member) => {
+                log::debug!("removing from set [{}], value [{}]", key, member);
 
                 self.connection
                     .as_mut()
                     .unwrap()
-                    .sadd(format!("{}.ts", key), value)
+                    .srem(key, member)
                     .or_restart()?;
             }
-            model::CRDTCommand::SetAdd(key, value) => {
-                log::debug!("adding to set [{}], value [{}]", key, value);
-
-                self.connection
-                    .as_mut()
-                    .unwrap()
-                    .sadd(key, value)
-                    .or_restart()?;
-            }
-            model::CRDTCommand::SetRemove(key, value) => {
-                log::debug!("removing from set [{}], value [{}]", key, value);
-
-                self.connection
-                    .as_mut()
-                    .unwrap()
-                    .srem(key, value)
-                    .or_restart()?;
-            }
-            model::CRDTCommand::LastWriteWins(key, value, ts) => {
+            model::CRDTCommand::LastWriteWins(key, member, ts) => {
                 log::debug!("last write for [{}], slot [{}]", key, ts);
 
                 self.connection
                     .as_mut()
                     .unwrap()
-                    .zadd(key, value, ts)
+                    .zadd(key, member, ts)
                     .or_restart()?;
             }
-            model::CRDTCommand::SortedSetAdd(key, value, delta) => {
+            model::CRDTCommand::SortedSetAdd(key, member, delta) => {
                 log::debug!(
                     "sorted set add [{}], value [{}], delta [{}]",
                     key,
-                    value,
+                    member,
                     delta
                 );
 
                 self.connection
                     .as_mut()
                     .unwrap()
-                    .zincr(key, value, delta)
+                    .zincr(key, member, delta)
                     .or_restart()?;
             }
-            model::CRDTCommand::SortedSetRemove(key, value, delta) => {
+            model::CRDTCommand::SortedSetMemberRemove(key, member) => {
+                log::debug!("sorted set member remove [{}], value [{}]", key, member);
+
+                self.connection
+                    .as_mut()
+                    .unwrap()
+                    .zrem(&key, member)
+                    .or_restart()?;
+            }
+            model::CRDTCommand::SortedSetRemove(key, member, delta) => {
                 log::debug!(
-                    "sorted set remove [{}], value [{}], delta [{}]",
+                    "sorted set member with score remove [{}], value [{}], delta [{}]",
                     key,
-                    value,
+                    member,
                     delta
                 );
 
                 self.connection
                     .as_mut()
                     .unwrap()
-                    .zincr(&key, value, delta)
+                    .zrembyscore(&key, member, delta)
                     .or_restart()?;
+            }
+            model::CRDTCommand::Spoil(key) => {
+                log::debug!("overwrite [{}]", key);
 
-                // removal of dangling scores  (aka garage collection)
-                self.connection
-                    .as_mut()
-                    .unwrap()
-                    .zrembyscore(&key, 0, 0)
-                    .or_restart()?;
+                self.connection.as_mut().unwrap().del(key).or_restart()?;
             }
             model::CRDTCommand::AnyWriteWins(key, value) => {
                 log::debug!("overwrite [{}]", key);
@@ -310,20 +299,24 @@ impl gasket::runtime::Worker for Worker {
 
                 self.connection.as_mut().unwrap().del(key).or_restart()?;
             }
-            model::CRDTCommand::BlockFinished(point) => {
+            model::CRDTCommand::BlockFinished(point, finalize) => {
                 let cursor_str = crosscut::PointArg::from(point).to_string();
-                self.connection
-                    .as_mut()
-                    .unwrap()
-                    .set(self.config.cursor_key(), &cursor_str)
-                    .or_restart()?;
 
-                log::info!(
-                    "new cursor saved to redis {} {}",
-                    &self.config.cursor_key(),
-                    &cursor_str
-                );
+                if finalize {
+                    self.connection
+                        .as_mut()
+                        .unwrap()
+                        .set(self.config.cursor_key(), &cursor_str)
+                        .or_restart()?;
 
+                    log::info!(
+                        "new cursor saved to redis {} {}",
+                        &self.config.cursor_key(),
+                        &cursor_str
+                    );
+                }
+
+                // end redis transaction
                 redis::cmd("EXEC")
                     .query(self.connection.as_mut().unwrap())
                     .or_restart()?;
