@@ -1,10 +1,9 @@
-use gasket::messaging::OutputPort;
 use serde::Deserialize;
 
-use crate::{bootstrap, crosscut, model, storage};
+use crate::{crosscut, storage};
 
-#[cfg(target_family = "unix")]
-pub mod n2c;
+// #[cfg(target_family = "unix")]
+// pub mod n2c;
 
 pub mod n2n;
 pub mod utils;
@@ -13,45 +12,27 @@ pub mod utils;
 #[serde(tag = "type")]
 pub enum Config {
     N2N(n2n::Config),
-
-    #[cfg(target_family = "unix")]
-    
-    N2C(n2c::Config),
+    // #[cfg(target_family = "unix")]
+    // N2C(n2c::Config),
 }
 
 impl Config {
-    pub fn bootstrapper(
-        self,
+    pub fn plugin(
+        &mut self,
         chain: &crosscut::ChainWellKnownInfo,
         blocks: &crosscut::historic::BufferBlocks,
         intersect: &crosscut::IntersectConfig,
-        finalize: &Option<crosscut::FinalizeConfig>,
+        finalize: &crosscut::FinalizeConfig,
         policy: &crosscut::policies::RuntimePolicy,
-    ) -> Bootstrapper {
+        cursor: &storage::Cursor,
+    ) -> n2n::chainsync::Stage {
         match self {
-            Config::N2N(c) => Bootstrapper::N2N(c.bootstrapper(chain, blocks, intersect, finalize, policy)),
-            Config::N2C(c) => Bootstrapper::N2C(c.bootstrapper(chain, blocks, intersect, finalize, policy)),
+            Config::N2N(c) => c.bootstrapper(chain, blocks, intersect, finalize, policy, cursor),
         }
     }
 }
 
-pub enum Bootstrapper {
+pub enum Stage {
     N2N(n2n::Bootstrapper),
-    N2C(n2c::Bootstrapper),
-}
-
-impl Bootstrapper {
-    pub fn borrow_output_port(&mut self) -> &'_ mut OutputPort<model::RawBlockPayload> {
-        match self {
-            Bootstrapper::N2N(p) => p.borrow_output_port(),
-            Bootstrapper::N2C(p) => p.borrow_output_port(),
-        }
-    }
-
-    pub fn spawn_stages(self, pipeline: &mut bootstrap::Pipeline, cursor: storage::Cursor) {
-        match self {
-            Bootstrapper::N2N(p) => p.spawn_stages(pipeline, cursor),
-            Bootstrapper::N2C(p) => p.spawn_stages(pipeline, cursor),
-        }
-    }
+    // N2C(n2c::Bootstrapper),
 }

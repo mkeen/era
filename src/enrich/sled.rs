@@ -1,8 +1,9 @@
+use gasket::framework::*;
 use std::time::Duration;
 
 use gasket::{
-    error::AsWorkError,
-    runtime::{spawn_stage, WorkOutcome},
+    messaging::tokio::{InputPort, OutputPort},
+    runtime::spawn_stage,
 };
 
 use pallas::{
@@ -15,90 +16,33 @@ use sled::IVec;
 
 use crate::{
     bootstrap, crosscut,
-    model::{self, BlockContext},
+    model::{self, BlockContext, EnrichedBlockPayload, RawBlockPayload},
     prelude::AppliesPolicy,
 };
-
-type InputPort = gasket::messaging::TwoPhaseInputPort<model::RawBlockPayload>;
-type OutputPort = gasket::messaging::OutputPort<model::EnrichedBlockPayload>;
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
     pub db_path: String,
     pub rollback_db_path: Option<String>,
+    pub policy: crosscut::policies::RuntimePolicy,
 }
 
 impl Config {
-    pub fn boostrapper(
+    pub fn bootstrapper(
         mut self,
         policy: &crosscut::policies::RuntimePolicy,
         blocks: &crosscut::historic::BlockConfig,
-    ) -> Bootstrapper {
+    ) -> Stage {
         self.rollback_db_path = Some(blocks.rollback_db_path.clone());
 
-        Bootstrapper {
+        Stage {
             config: self,
-            policy: policy.clone(),
             input: Default::default(),
             output: Default::default(),
+            inserts_count: Default::default(),
+            blocks_counter: Default::default(),
         }
     }
-}
-
-pub struct Bootstrapper {
-    config: Config,
-    policy: crosscut::policies::RuntimePolicy,
-    input: InputPort,
-    output: OutputPort,
-}
-
-impl Bootstrapper {
-    pub fn borrow_input_port(&mut self) -> &'_ mut InputPort {
-        &mut self.input
-    }
-
-    pub fn borrow_output_port(&mut self) -> &'_ mut OutputPort {
-        &mut self.output
-    }
-
-    pub fn spawn_stages(self, pipeline: &mut bootstrap::Pipeline) {
-        let worker = Worker {
-            config: self.config,
-            policy: self.policy,
-            enrich_db: None,
-            rollback_db: None,
-            input: self.input,
-            output: self.output,
-            inserts_counter: Default::default(),
-            remove_counter: Default::default(),
-            matches_counter: Default::default(),
-            mismatches_counter: Default::default(),
-            blocks_counter: Default::default(),
-        };
-
-        pipeline.register_stage(spawn_stage(
-            worker,
-            gasket::runtime::Policy {
-                tick_timeout: Some(Duration::from_secs(600)),
-                ..Default::default()
-            },
-            Some("enrich-sled"),
-        ));
-    }
-}
-
-pub struct Worker {
-    config: Config,
-    policy: crosscut::policies::RuntimePolicy,
-    enrich_db: Option<sled::Db>,
-    rollback_db: Option<sled::Db>,
-    input: InputPort,
-    output: OutputPort,
-    inserts_counter: gasket::metrics::Counter,
-    remove_counter: gasket::metrics::Counter,
-    matches_counter: gasket::metrics::Counter,
-    mismatches_counter: gasket::metrics::Counter,
-    blocks_counter: gasket::metrics::Counter,
 }
 
 struct SledTxValue(u16, Vec<u8>);
@@ -141,7 +85,12 @@ fn fetch_referenced_utxo<'a>(
     }
 }
 
-impl Worker {
+struct Sled {
+    enrich_db: Option<sled::Db>,
+    rollback_db: Option<sled::Db>,
+}
+
+impl Sled {
     fn db_refs_all(&self) -> Result<Option<(&sled::Db, &sled::Db)>, ()> {
         match (self.db_ref_enrich(), self.db_ref_rollback()) {
             (Some(db), Some(consumed_ring)) => Ok(Some((db, consumed_ring))),
@@ -180,8 +129,6 @@ impl Worker {
 
         let batch_results = db.apply_batch(insert_batch).or_retry();
 
-        self.inserts_counter.inc(txs.len() as u64);
-
         batch_results.map_err(crate::Error::storage)
     }
 
@@ -194,7 +141,6 @@ impl Worker {
             }
         }
 
-        self.remove_counter.inc(txs.len() as u64);
         db.apply_batch(remove_batch).map_err(crate::Error::storage)
     }
 
@@ -220,9 +166,6 @@ impl Worker {
         for m in matches? {
             if let Some((key, era, cbor)) = m {
                 ctx.import_ref_output(&key, era, cbor);
-                self.matches_counter.inc(1);
-            } else {
-                self.mismatches_counter.inc(1);
             }
         }
 
@@ -272,8 +215,6 @@ impl Worker {
             _ => Err(()),
         };
 
-        self.remove_counter.inc(keys.len() as u64);
-
         result
     }
 
@@ -309,111 +250,131 @@ impl Worker {
             _ => Err(crate::Error::storage("failed to roll back consumed utxos")),
         };
 
-        self.inserts_counter.inc(txs.len() as u64);
-
         result
     }
 }
 
-impl gasket::runtime::Worker for Worker {
-    fn metrics(&self) -> gasket::metrics::Registry {
-        gasket::metrics::Builder::new()
-            .with_counter("enrich_inserts", &self.inserts_counter)
-            .with_counter("enrich_removes", &self.remove_counter)
-            .with_counter("enrich_matches", &self.matches_counter)
-            .with_counter("enrich_mismatches", &self.mismatches_counter)
-            .with_counter("enrich_blocks", &self.blocks_counter)
-            .build()
+#[derive(Stage)]
+#[stage(name = "enrich-sled", unit = "RawBlockPayload", worker = "Worker")]
+pub struct Stage {
+    config: Config,
+
+    pub input: InputPort<RawBlockPayload>,
+    pub output: OutputPort<EnrichedBlockPayload>,
+
+    #[metric]
+    inserts_count: gasket::metrics::Counter,
+    blocks_counter: gasket::metrics::Counter,
+}
+
+pub struct Worker {
+    sled: Sled,
+}
+
+#[async_trait::async_trait(?Send)]
+impl gasket::framework::Worker<Stage> for Worker {
+    async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
+        let sled = Sled {
+            enrich_db: Some(
+                sled::open(&stage.config.db_path.clone())
+                    .or_retry()
+                    .unwrap(),
+            ),
+            rollback_db: Some(
+                sled::open(stage.config.rollback_db_path.clone().unwrap_or_default())
+                    .or_retry()
+                    .unwrap(),
+            ),
+        };
+
+        log::warn!("finished opening enrich databases");
+        Ok(Self { sled })
     }
 
-    fn work(&mut self) -> gasket::runtime::WorkResult {
-        let msg = self.input.recv_or_idle()?;
-        let all_dbs = self.db_refs_all();
-        if let Err(_) = all_dbs {
-            return Err(gasket::error::Error::WorkPanic("database error".into()));
-        }
+    async fn schedule(
+        &mut self,
+        stage: &mut Stage,
+    ) -> Result<WorkSchedule<RawBlockPayload>, WorkerError> {
+        let msg = stage.input.recv().await.or_panic()?;
+        Ok(WorkSchedule::Unit(msg.payload))
+    }
 
-        let all_dbs = all_dbs.unwrap();
+    async fn execute(
+        &mut self,
+        unit: &RawBlockPayload,
+        stage: &mut Stage,
+    ) -> Result<(), WorkerError> {
+        let all_dbs = self.sled.db_refs_all().unwrap();
 
         if let Some((db, consumed_ring)) = all_dbs {
-            match msg.payload {
+            match unit {
                 model::RawBlockPayload::RollForward(cbor) => {
                     let block = MultiEraBlock::decode(&cbor)
                         .map_err(crate::Error::cbor)
-                        .apply_policy(&self.policy)
+                        .apply_policy(&stage.config.clone().policy)
                         .or_panic()?;
 
                     let block = match block {
                         Some(x) => x,
-                        None => return Ok(gasket::runtime::WorkOutcome::Partial),
+                        None => return Ok(()),
                     };
 
                     let txs = &block.txs();
 
-                    self.insert_produced_utxos(db, txs).or_panic()?;
-                    let ctx = self.par_fetch_referenced_utxos(db, &txs).or_panic()?;
+                    self.sled.insert_produced_utxos(db, txs).or_panic()?;
+                    let ctx = self.sled.par_fetch_referenced_utxos(db, &txs).or_panic()?;
 
                     // and finally we remove utxos consumed by the block
-                    self.remove_consumed_utxos(db, consumed_ring, &txs)
+                    self.sled
+                        .remove_consumed_utxos(db, consumed_ring, &txs)
                         .expect("todo panic");
 
-                    self.output
-                        .send(model::EnrichedBlockPayload::roll_forward(cbor, ctx))?;
+                    stage
+                        .output
+                        .send(model::EnrichedBlockPayload::roll_forward(*cbor, ctx))
+                        .await;
                 }
+
                 model::RawBlockPayload::RollBack(cbor, last_known_block_info, finalize) => {
                     let block = MultiEraBlock::decode(&cbor)
                         .map_err(crate::Error::cbor)
-                        .apply_policy(&self.policy);
+                        .apply_policy(&stage.config.clone().policy);
 
-                    match block {
-                        Ok(block) => {
-                            let block = match block {
-                                Some(x) => x,
-                                None => return Ok(gasket::runtime::WorkOutcome::Partial),
-                            };
-
+                    if let Ok(block) = block {
+                        if let Some(block) = block {
                             let txs = block.txs();
 
                             // Revert Anything to do with this block
-                            self.remove_produced_utxos(db, &txs)
+                            self.sled
+                                .remove_produced_utxos(db, &txs)
                                 .expect("todo: panic error");
-                            self.replace_consumed_utxos(db, consumed_ring, &txs)
+                            self.sled
+                                .replace_consumed_utxos(db, consumed_ring, &txs)
                                 .expect("todo: panic error");
 
-                            let ctx = self.par_fetch_referenced_utxos(db, &txs).or_restart()?;
+                            let ctx = self
+                                .sled
+                                .par_fetch_referenced_utxos(db, &txs)
+                                .or_restart()?;
 
-                            self.output.send(model::EnrichedBlockPayload::roll_back(
-                                cbor,
-                                ctx,
-                                last_known_block_info,
-                                finalize,
-                            ))?;
+                            stage
+                                .output
+                                .send(model::EnrichedBlockPayload::roll_back(
+                                    *cbor,
+                                    ctx,
+                                    *last_known_block_info,
+                                    *finalize,
+                                ))
+                                .await;
                         }
-                        Err(_) => return Ok(gasket::runtime::WorkOutcome::Partial),
                     }
 
-                    self.blocks_counter.inc(1);
+                    stage.blocks_counter.inc(1);
                 }
             };
         }
 
-        self.input.commit();
-        Ok(WorkOutcome::Partial)
-    }
-
-    fn bootstrap(&mut self) -> Result<(), gasket::error::Error> {
-        let enrich_db = sled::open(&self.config.db_path).or_retry()?;
-        let rollback_db =
-            sled::open(self.config.rollback_db_path.clone().unwrap_or_default()).or_retry()?;
-
-        self.enrich_db = Some(enrich_db);
-        self.rollback_db = Some(rollback_db);
-
-        log::warn!("finished opening enrich databases");
-        Ok(())
-    }
-
-    fn teardown(&mut self) -> Result<(), gasket::error::Error> {
+        // todo propagate the workererror from above down here
         Ok(())
     }
 }

@@ -37,10 +37,10 @@ key_prefix = "p"
 type = "Parameters"
 key_prefix = "pr"
 
-[[reducers]]
-type = "UtxoOwners"
-key_prefix = "tx"
-coin_key_prefix = "c"
+#[[reducers]]
+#type = "UtxoOwners"
+#key_prefix = "tx"
+#coin_key_prefix = "c"
 
 [[reducers]]
 type = "UtxoByAddress"

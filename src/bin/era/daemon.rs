@@ -1,5 +1,6 @@
 use clap;
 use era::{bootstrap, crosscut, enrich, reducers, sources, storage};
+use gasket::runtime::spawn_stage;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -98,6 +99,23 @@ fn shutdown(pipeline: bootstrap::Pipeline) {
     }
 }
 
+// fn gasket_policy(config: Option<&gasket::retries::Policy>) -> gasket::runtime::Policy {
+//     let default_policy = gasket::retries::Policy {
+//         max_retries: 20,
+//         backoff_unit: Duration::from_secs(1),
+//         backoff_factor: 2,
+//         max_backoff: Duration::from_secs(60),
+//         dismissible: false,
+//     };
+
+//     gasket::runtime::Policy {
+//         tick_timeout: None,
+//         bootstrap_retry: config.cloned().unwrap_or(default_policy.clone()),
+//         work_retry: config.cloned().unwrap_or(default_policy.clone()),
+//         teardown_retry: config.cloned().unwrap_or(default_policy.clone()),
+//     }
+// }
+
 pub fn run(args: &Args) -> Result<(), era::Error> {
     console::initialize(&args.console);
 
@@ -105,16 +123,22 @@ pub fn run(args: &Args) -> Result<(), era::Error> {
         .map_err(|err| era::Error::ConfigError(format!("{:?}", err)))?;
 
     let chain = config.chain.unwrap_or_default().into();
+
     let block_config = config.blocks.unwrap_or_default();
     let blocks = block_config.clone().into();
     let policy = config.policy.unwrap_or_default().into();
 
-    let source = config.source.bootstrapper(
+    let storage = config.storage.plugin(&chain, &config.intersect, &policy); // Am I supposed to pass the cursor in or no?
+
+    let cursor = storage.build_cursor();
+
+    let source = config.source.plugin(
         &chain,
         &blocks,
         &config.intersect,
         &config.finalize,
         &policy,
+        &cursor,
     );
 
     let enrich = config
@@ -124,9 +148,7 @@ pub fn run(args: &Args) -> Result<(), era::Error> {
 
     let reducer = reducers::Bootstrapper::new(config.reducers, &chain, &policy);
 
-    let storage = config.storage.plugin(&chain, &config.intersect, &policy);
-
-    let pipeline = bootstrap::build(source, enrich, reducer, storage)?;
+    let pipeline = bootstrap::build(source, enrich, reducer, storage, cursor)?;
 
     while !should_stop(&pipeline) {
         console::refresh(&args.console, &pipeline);

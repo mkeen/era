@@ -7,7 +7,7 @@ use blake2::Blake2bVar;
 use pallas::codec::utils::KeyValuePairs;
 use pallas::ledger::primitives::alonzo::{Metadata, Metadatum, MetadatumLabel};
 use pallas::ledger::primitives::Fragment;
-use pallas::ledger::traverse::{MultiEraBlock, MultiEraTx};
+use pallas::ledger::traverse::{assets, MultiEraBlock, MultiEraTx};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -180,7 +180,7 @@ impl Reducer {
 
     fn extract_and_aggregate_cip_metadata(
         &self,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
         cip: u64,
         policy_map: &Metadatum,
         policy_id_str: String,
@@ -318,61 +318,31 @@ impl Reducer {
         block: &MultiEraBlock,
         tx: &MultiEraTx,
         rollback: bool,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
     ) -> Result<(), gasket::error::Error> {
         let metadata = tx.metadata();
 
-        // Search for typical minting metadata
-        match tx.mint() {
-            pallas::ledger::traverse::MultiEraMint::AlonzoCompatible(safe_mint) => {
-                for (policy_id, assets) in safe_mint.iter() {
-                    let policy_id_str = hex::encode(policy_id);
-                    for (asset_name, quantity) in assets.iter() {
-                        if let Ok(asset_name_str) = String::from_utf8(asset_name.to_vec()) {
-                            if !policy_id_str.is_empty() {
-                                for supported_metadata_cip in
-                                    vec![CIP25_META_NFT, CIP27_META_ROYALTIES]
+        for asset_group in tx.mints() {
+            for multi_asset in asset_group.assets() {
+                let policy_id_str = hex::encode(multi_asset.policy());
+                if let Some(quantity) = multi_asset.mint_coin() {
+                    if let Ok(asset_name_str) = String::from_utf8(multi_asset.name().to_vec()) {
+                        if !policy_id_str.is_empty() {
+                            for supported_metadata_cip in vec![CIP25_META_NFT, CIP27_META_ROYALTIES]
+                            {
+                                if let Some(policy_map) =
+                                    metadata.find(MetadatumLabel::from(supported_metadata_cip))
                                 {
-                                    if let Some(policy_map) =
-                                        metadata.find(MetadatumLabel::from(supported_metadata_cip))
-                                    {
-                                        match supported_metadata_cip {
-                                            CIP25_META_NFT => Some(if quantity.clone() > 0 {
-                                                self.extract_and_aggregate_cip_metadata(
-                                                    output,
-                                                    supported_metadata_cip,
-                                                    policy_map,
-                                                    policy_id_str.to_owned(),
-                                                    asset_name_str.to_owned(),
-                                                    block.slot().to_owned(),
-                                                    rollback,
-                                                )
-                                            } else {
-                                                self.extract_and_aggregate_cip_metadata(
-                                                    output,
-                                                    supported_metadata_cip,
-                                                    policy_map,
-                                                    policy_id_str.to_owned(),
-                                                    asset_name_str.to_owned(),
-                                                    block.slot().to_owned(),
-                                                    rollback,
-                                                )
-                                            }),
-
-                                            CIP27_META_ROYALTIES => Some(if quantity.clone() > 0 {
-                                                self.extract_and_aggregate_cip_metadata(
-                                                    output,
-                                                    supported_metadata_cip,
-                                                    policy_map,
-                                                    policy_id_str.to_owned(),
-                                                    asset_name_str.to_owned(),
-                                                    block.slot().to_owned(),
-                                                    rollback,
-                                                )
-                                            }),
-
-                                            _ => None,
-                                        };
+                                    if quantity > -1 {
+                                        self.extract_and_aggregate_cip_metadata(
+                                            output,
+                                            supported_metadata_cip,
+                                            policy_map,
+                                            policy_id_str.to_owned(),
+                                            asset_name_str.to_owned(),
+                                            block.slot().to_owned(),
+                                            rollback,
+                                        )
                                     }
                                 }
                             }
@@ -380,7 +350,6 @@ impl Reducer {
                     }
                 }
             }
-            _ => {}
         }
 
         Ok(())
@@ -390,7 +359,7 @@ impl Reducer {
         &mut self,
         block: &'b MultiEraBlock<'b>,
         rollback: bool,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
     ) -> Result<(), gasket::error::Error> {
         for tx in &block.txs() {
             if tx.metadata().as_alonzo().iter().any(|meta| {

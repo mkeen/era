@@ -1,9 +1,6 @@
-use std::collections::HashMap;
-
-use pallas::ledger::traverse::MultiEraTx;
 use serde::{Deserialize, Serialize};
 
-use crate::{model::BlockContext, Error};
+use crate::Error;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub enum ErrorAction {

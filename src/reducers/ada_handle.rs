@@ -1,6 +1,6 @@
 use pallas::ledger::addresses::{Address, StakeAddress};
 use pallas::ledger::traverse::MultiEraOutput;
-use pallas::ledger::traverse::{Asset, MultiEraBlock};
+use pallas::ledger::traverse::{MultiEraAsset, MultiEraBlock};
 use serde::Deserialize;
 
 use crate::{crosscut, model};
@@ -25,11 +25,14 @@ pub struct Reducer {
 }
 
 impl Reducer {
-    fn to_string_output(&self, asset: Asset) -> Option<String> {
-        if let Some(policy_id) = asset.policy_hex() {
+    fn to_string_output(&self, asset: MultiEraAsset) -> Option<String> {
+        if let policy_id = hex::encode(asset.policy()) {
             if policy_id.eq(self.config.policy_id.clone().unwrap().as_str()) {
-                if let Asset::NativeAsset(_, name, _) = asset {
-                    return String::from_utf8(name).ok();
+                if let MultiEraAsset::AlonzoCompatibleOutput(_, name, _) = asset {
+                    return match std::str::from_utf8(name) {
+                        Ok(a) => Some(a.to_string()),
+                        Err(_) => None,
+                    };
                 }
             }
         }
@@ -40,13 +43,15 @@ impl Reducer {
     pub fn process_txo(
         &self,
         txo: &MultiEraOutput,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
     ) -> Result<(), gasket::error::Error> {
-        let asset_names: Vec<_> = txo
-            .non_ada_assets()
-            .into_iter()
-            .filter_map(|x| self.to_string_output(x))
-            .collect();
+        let mut asset_names: Vec<String> = vec![];
+
+        for asset_list in txo.non_ada_assets() {
+            for asset in asset_list.assets() {
+                asset_names.push(std::str::from_utf8(asset.name()).unwrap().to_string())
+            }
+        }
 
         if asset_names.is_empty() {
             return Ok(());
@@ -91,7 +96,7 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
     ) -> Result<(), gasket::error::Error> {
         for tx in block.txs().iter() {
             if rollback {

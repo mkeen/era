@@ -1,7 +1,7 @@
 pub mod skip;
 pub mod sled;
 
-use gasket::messaging::{OutputPort, TwoPhaseInputPort};
+use gasket::messaging::tokio::{InputPort, OutputPort};
 use serde::Deserialize;
 
 use crate::{bootstrap, crosscut, model};
@@ -19,39 +19,20 @@ impl Default for Config {
     }
 }
 
+pub enum Stage {
+    Skip(skip::Stage),
+    Sled(sled::Stage),
+}
+
 impl Config {
-    pub fn bootstrapper(self, policy: &crosscut::policies::RuntimePolicy, blocks: &crosscut::historic::BlockConfig) -> Bootstrapper {
+    pub fn plugin(
+        self,
+        policy: &crosscut::policies::RuntimePolicy,
+        blocks: &crosscut::historic::BlockConfig,
+    ) -> Stage {
         match self {
-            Config::Skip => Bootstrapper::Skip(skip::Bootstrapper::default()),
-            Config::Sled(c) => Bootstrapper::Sled(c.boostrapper(policy, blocks)),
-        }
-    }
-}
-
-pub enum Bootstrapper {
-    Skip(skip::Bootstrapper),
-    Sled(sled::Bootstrapper),
-}
-
-impl Bootstrapper {
-    pub fn borrow_input_port(&mut self) -> &'_ mut TwoPhaseInputPort<model::RawBlockPayload> {
-        match self {
-            Bootstrapper::Skip(x) => x.borrow_input_port(),
-            Bootstrapper::Sled(x) => x.borrow_input_port(),
-        }
-    }
-
-    pub fn borrow_output_port(&mut self) -> &'_ mut OutputPort<model::EnrichedBlockPayload> {
-        match self {
-            Bootstrapper::Skip(x) => x.borrow_output_port(),
-            Bootstrapper::Sled(x) => x.borrow_output_port(),
-        }
-    }
-
-    pub fn spawn_stages(self, pipeline: &mut bootstrap::Pipeline) {
-        match self {
-            Bootstrapper::Skip(x) => x.spawn_stages(pipeline),
-            Bootstrapper::Sled(x) => x.spawn_stages(pipeline),
+            Config::Skip => Stage::Skip(skip::Config {}.bootstrapper()),
+            Config::Sled(w) => Stage::Sled(w.bootstrapper(policy, blocks)),
         }
     }
 }

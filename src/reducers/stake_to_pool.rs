@@ -19,7 +19,7 @@ impl Reducer {
         &mut self,
         cred: &StakeCredential,
         pool: &PoolKeyhash,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
     ) -> Result<(), gasket::error::Error> {
         let key = match cred {
             StakeCredential::AddrKeyhash(x) => x.to_string(),
@@ -39,7 +39,7 @@ impl Reducer {
     fn deregistration(
         &mut self,
         cred: &StakeCredential,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
     ) -> Result<(), gasket::error::Error> {
         let key = match cred {
             StakeCredential::AddrKeyhash(x) => x.to_string(),
@@ -57,7 +57,7 @@ impl Reducer {
         &mut self,
         block: &'b MultiEraBlock<'b>,
         rollback: bool,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
     ) -> Result<(), gasket::error::Error> {
         for tx in block.txs() {
             if tx.is_valid() {

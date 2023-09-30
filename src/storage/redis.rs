@@ -1,17 +1,13 @@
 use std::{str::FromStr, time::Duration};
 
-use gasket::{
-    error::AsWorkError,
-    runtime::{spawn_stage, WorkOutcome},
-};
+use gasket::framework::*;
+use gasket::messaging::tokio::InputPort;
 
 use redis::{Cmd, Commands, ConnectionLike, ToRedisArgs};
 use serde::Deserialize;
 
-use crate::model::{Member, Value};
+use crate::model::{CRDTCommand, Member, Value};
 use crate::{bootstrap, crosscut, model};
-
-type InputPort = gasket::messaging::TwoPhaseInputPort<model::CRDTCommand>;
 
 impl ToRedisArgs for model::Value {
     fn write_redis_args<W>(&self, out: &mut W)
@@ -36,58 +32,22 @@ pub struct Config {
 impl Config {
     pub fn bootstrapper(
         self,
-        _chain: &crosscut::ChainWellKnownInfo,
-        _intersect: &crosscut::IntersectConfig,
-    ) -> Bootstrapper {
-        Bootstrapper {
+        chain: &crosscut::ChainWellKnownInfo,
+        intersect: &crosscut::IntersectConfig,
+        policy: &crosscut::policies::RuntimePolicy,
+    ) -> Stage {
+        Stage {
             config: self,
+            cursor: Cursor {
+                config: self.clone(),
+            },
             input: Default::default(),
+            ops_count: Default::default(),
         }
     }
 
     pub fn cursor_key(&self) -> &str {
         self.cursor_key.as_deref().unwrap_or("_cursor")
-    }
-}
-
-pub struct Bootstrapper {
-    config: Config,
-    input: InputPort,
-}
-
-impl Bootstrapper {
-    pub fn borrow_input_port(&mut self) -> &'_ mut InputPort {
-        &mut self.input
-    }
-
-    pub fn build_cursor(&self) -> Cursor {
-        Cursor {
-            config: self.config.clone(),
-        }
-    }
-
-    pub fn spawn_stages(self, pipeline: &mut bootstrap::Pipeline) {
-        let worker = Worker {
-            config: self.config.clone(),
-            connection: None,
-            input: self.input,
-            ops_count: Default::default(),
-        };
-
-        pipeline.register_stage(spawn_stage(
-            worker,
-            gasket::runtime::Policy {
-                tick_timeout: Some(Duration::from_secs(600)),
-                bootstrap_retry: gasket::retries::Policy {
-                    max_retries: 20,
-                    backoff_unit: Duration::from_secs(1),
-                    backoff_factor: 2,
-                    max_backoff: Duration::from_secs(60),
-                },
-                ..Default::default()
-            },
-            Some("redis"),
-        ));
     }
 }
 
@@ -114,24 +74,44 @@ impl Cursor {
     }
 }
 
-pub struct Worker {
+#[derive(Stage)]
+#[stage(name = "storage-redis", unit = "CRDTCommand", worker = "Worker")]
+pub struct Stage {
     config: Config,
-    connection: Option<redis::Connection>,
+    cursor: Cursor,
+
+    pub input: InputPort<CRDTCommand>,
+
+    #[metric]
     ops_count: gasket::metrics::Counter,
-    input: InputPort,
 }
 
-impl gasket::runtime::Worker for Worker {
-    fn metrics(&self) -> gasket::metrics::Registry {
-        gasket::metrics::Builder::new()
-            .with_counter("storage_ops", &self.ops_count)
-            .build()
+struct Worker {
+    connection: Option<redis::Connection>,
+}
+
+#[async_trait::async_trait(?Send)]
+impl gasket::framework::Worker<Stage> for Worker {
+    async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
+        let connection = redis::Client::open(stage.config.connection_params.clone())
+            .and_then(|c| c.get_connection())
+            .or_retry()
+            .unwrap()
+            .into();
+
+        Ok(Self { connection })
     }
 
-    fn work(&mut self) -> gasket::runtime::WorkResult {
-        let msg = self.input.recv_or_idle()?;
+    async fn schedule(
+        &mut self,
+        stage: &mut Stage,
+    ) -> Result<WorkSchedule<CRDTCommand>, WorkerError> {
+        let msg = stage.input.recv().await.or_panic()?;
+        Ok(WorkSchedule::Unit(msg.payload))
+    }
 
-        match msg.payload {
+    async fn execute(&mut self, unit: &CRDTCommand, stage: &mut Stage) -> Result<(), WorkerError> {
+        match unit {
             model::CRDTCommand::BlockStarting(_) => {
                 // start redis transaction
                 redis::cmd("MULTI")
@@ -300,18 +280,18 @@ impl gasket::runtime::Worker for Worker {
                 self.connection.as_mut().unwrap().del(key).or_restart()?;
             }
             model::CRDTCommand::BlockFinished(point, finalize) => {
-                let cursor_str = crosscut::PointArg::from(point).to_string();
+                let cursor_str = crosscut::PointArg::from(*point).to_string();
 
-                if finalize {
+                if *finalize {
                     self.connection
                         .as_mut()
                         .unwrap()
-                        .set(self.config.cursor_key(), &cursor_str)
+                        .set(stage.config.cursor_key(), &cursor_str)
                         .or_restart()?;
 
                     log::info!(
                         "new cursor saved to redis {} {}",
-                        &self.config.cursor_key(),
+                        &stage.config.cursor_key(),
                         &cursor_str
                     );
                 }
@@ -323,22 +303,8 @@ impl gasket::runtime::Worker for Worker {
             }
         };
 
-        self.ops_count.inc(1);
-        self.input.commit();
+        stage.ops_count.inc(1);
 
-        Ok(WorkOutcome::Partial)
-    }
-
-    fn bootstrap(&mut self) -> Result<(), gasket::error::Error> {
-        self.connection = redis::Client::open(self.config.connection_params.clone())
-            .and_then(|c| c.get_connection())
-            .or_retry()?
-            .into();
-
-        Ok(())
-    }
-
-    fn teardown(&mut self) -> Result<(), gasket::error::Error> {
         Ok(())
     }
 }

@@ -1,13 +1,12 @@
 use std::time::Duration;
 
+use gasket::messaging::tokio::{InputPort, OutputPort};
 use gasket::runtime::spawn_stage;
 use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
 
+use crate::model::{CRDTCommand, EnrichedBlockPayload};
 use crate::{bootstrap, crosscut, model};
-
-type InputPort = gasket::messaging::TwoPhaseInputPort<model::EnrichedBlockPayload>;
-type OutputPort = gasket::messaging::OutputPort<model::CRDTCommand>;
 
 pub mod macros;
 
@@ -55,8 +54,8 @@ impl Config {
 }
 
 pub struct Bootstrapper {
-    input: InputPort,
-    output: OutputPort,
+    input: InputPort<EnrichedBlockPayload>,
+    output: OutputPort<CRDTCommand>,
     reducers: Vec<Reducer>,
     policy: crosscut::policies::RuntimePolicy,
 }
@@ -78,24 +77,12 @@ impl Bootstrapper {
         }
     }
 
-    pub fn borrow_input_port(&mut self) -> &'_ mut InputPort {
+    pub fn borrow_input_port(&mut self) -> &'_ mut InputPort<EnrichedBlockPayload> {
         &mut self.input
     }
 
-    pub fn borrow_output_port(&mut self) -> &'_ mut OutputPort {
+    pub fn borrow_output_port(&mut self) -> &'_ mut OutputPort<CRDTCommand> {
         &mut self.output
-    }
-
-    pub fn spawn_stages(self, pipeline: &mut bootstrap::Pipeline) {
-        let worker = worker::Worker::new(self.reducers, self.input, self.output, self.policy);
-        pipeline.register_stage(spawn_stage(
-            worker,
-            gasket::runtime::Policy {
-                tick_timeout: Some(Duration::from_secs(600)),
-                ..Default::default()
-            },
-            Some("reducers"),
-        ));
     }
 }
 
@@ -116,7 +103,7 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &mut OutputPort,
+        output: &mut OutputPort<CRDTCommand>,
     ) -> Result<(), gasket::error::Error> {
         match self {
             Reducer::UtxoOwners(x) => x.reduce_block(block, ctx, rollback, output),

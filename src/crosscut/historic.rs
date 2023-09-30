@@ -1,5 +1,5 @@
 use crate::Error;
-use gasket::error::AsWorkError;
+use gasket::framework::AsWorkError;
 use pallas::network::miniprotocols::Point;
 use serde::{Deserialize, Serialize};
 

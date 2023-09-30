@@ -2,7 +2,7 @@ use pallas::codec::utils::CborWrap;
 use pallas::crypto::hash::Hash;
 use pallas::ledger::primitives::babbage::{DatumOption, PlutusData};
 use pallas::ledger::primitives::Fragment;
-use pallas::ledger::traverse::{Asset, MultiEraBlock, MultiEraTx};
+use pallas::ledger::traverse::{MultiEraAsset, MultiEraBlock, MultiEraTx};
 use pallas::ledger::traverse::{MultiEraOutput, OriginalHash};
 use serde::Deserialize;
 use serde_json::json;
@@ -21,21 +21,21 @@ pub struct Reducer {
     policy: crosscut::policies::RuntimePolicy,
 }
 
-pub fn resolve_datum(utxo: &MultiEraOutput, tx: &MultiEraTx) -> Result<PlutusData, ()> {
-    match utxo.datum() {
-        Some(DatumOption::Data(CborWrap(pd))) => Ok(pd),
-        Some(DatumOption::Hash(datum_hash)) => {
-            for raw_datum in tx.clone().plutus_data() {
-                if raw_datum.original_hash().eq(&datum_hash) {
-                    return Ok(raw_datum.clone().unwrap());
-                }
-            }
+// pub fn resolve_datum(utxo: &MultiEraOutput, tx: &MultiEraTx) -> Result<PlutusData, ()> {
+//     match utxo.datum() {
+//         Some(DatumOption::Data(CborWrap(pd))) => Ok(pd),
+//         Some(DatumOption::Hash(datum_hash)) => {
+//             for raw_datum in tx.clone().plutus_data() {
+//                 if raw_datum.original_hash().eq(&datum_hash) {
+//                     return Ok(raw_datum.clone().unwrap());
+//                 }
+//             }
 
-            return Err(());
-        }
-        _ => Err(()),
-    }
-}
+//             return Err(());
+//         }
+//         _ => Err(()),
+//     }
+// }
 
 impl Reducer {
     fn get_key_value(
@@ -60,32 +60,32 @@ impl Reducer {
                     data["address"] = serde_json::Value::String(address);
                 }
 
-                if let Some(datum) = resolve_datum(utxo, tx).ok() {
-                    data["datum"] = serde_json::Value::String(hex::encode(
-                        datum.encode_fragment().ok().unwrap(),
-                    ));
-                } else if let Some(DatumOption::Hash(h)) = utxo.datum() {
-                    data["datum_hash"] = serde_json::Value::String(hex::encode(h.to_vec()));
-                }
+                // if let Some(datum) = resolve_datum(utxo, tx).ok() {
+                //     data["datum"] = serde_json::Value::String(hex::encode(
+                //         datum.encode_fragment().ok().unwrap(),
+                //     ));
+                // } else if let Some(DatumOption::Hash(h)) = utxo.datum() {
+                //     data["datum_hash"] = serde_json::Value::String(hex::encode(h.to_vec()));
+                // }
 
                 let mut assets: Vec<serde_json::Value> = Vec::new();
-                for asset in utxo.non_ada_assets() {
-                    match asset {
-                        Asset::Ada(lovelace_amt) => {
-                            assets.push(json!({
-                                "unit": "lovelace",
-                                "quantity": format!("{}", lovelace_amt)
-                            }));
-                        }
-                        Asset::NativeAsset(cs, tkn, amt) => {
-                            let unit = format!("{}{}", hex::encode(cs.to_vec()), hex::encode(tkn));
-                            assets.push(json!({
-                                "unit": unit,
-                                "quantity": format!("{}", amt)
-                            }));
-                        }
-                    }
-                }
+                // for asset in utxo.non_ada_assets() {
+                //     match asset {
+                //         MultiEraAsset::Ada(lovelace_amt) => {
+                //             assets.push(json!({
+                //                 "unit": "lovelace",
+                //                 "quantity": format!("{}", lovelace_amt)
+                //             }));
+                //         }
+                //         MultiEraAsset::NativeAsset(cs, tkn, amt) => {
+                //             let unit = format!("{}{}", hex::encode(cs.to_vec()), hex::encode(tkn));
+                //             assets.push(json!({
+                //                 "unit": unit,
+                //                 "quantity": format!("{}", amt)
+                //             }));
+                //         }
+                //     }
+                // }
 
                 data["amount"] = serde_json::Value::Array(assets);
                 return Some((key, data.to_string()));
@@ -100,7 +100,7 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
     ) -> Result<(), gasket::error::Error> {
         if rollback {
             return Ok(());

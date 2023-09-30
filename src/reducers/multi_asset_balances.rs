@@ -1,5 +1,7 @@
 use pallas::ledger::traverse::MultiEraBlock;
-use pallas::ledger::traverse::{Asset, MultiEraInput, MultiEraOutput};
+use pallas::ledger::traverse::{
+    MultiEraAsset, MultiEraInput, MultiEraOutput, MultiEraPolicyAssets,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{crosscut, model, prelude::*};
@@ -74,7 +76,7 @@ impl Reducer {
         &self,
         address: &String,
         lovelace: i64,
-        assets: &Vec<Asset>,
+        assets_group: &Vec<MultiEraPolicyAssets>,
         spending: bool,
     ) -> (
         HashMap<String, HashMap<String, i64>>,
@@ -84,34 +86,37 @@ impl Reducer {
         let mut policy_asset_owners: HashMap<String, HashMap<String, Vec<(String, i64)>>> =
             HashMap::new();
 
-        for asset in assets.clone() {
-            if let Asset::NativeAsset(policy_id, asset_name, quantity) = asset {
-                let asset_name = hex::encode(asset_name);
-
-                if let Ok(fingerprint) =
-                    asset_fingerprint([policy_id.clone().to_string().as_str(), asset_name.as_str()])
+        for assets_container in assets_group {
+            for asset in assets_container.assets() {
+                if let MultiEraAsset::AlonzoCompatibleOutput(policy_id, asset_name, quantity) =
+                    asset
                 {
-                    if !fingerprint.is_empty() {
-                        let adjusted_quantity: i64 = match spending {
-                            true => -(quantity as i64),
-                            false => quantity as i64,
-                        };
+                    let asset_name = hex::encode(asset_name.to_vec());
+                    let encoded_policy_id = hex::encode(policy_id);
 
-                        *fingerprint_tallies
-                            .entry(address.clone())
-                            .or_insert(HashMap::new())
-                            .entry(fingerprint.clone())
-                            .or_insert(0_i64) += adjusted_quantity;
+                    if let Ok(fingerprint) = asset_fingerprint([&encoded_policy_id, &asset_name]) {
+                        if !fingerprint.is_empty() {
+                            let adjusted_quantity: i64 = match spending {
+                                true => -(quantity as i64),
+                                false => quantity as i64,
+                            };
 
-                        policy_asset_owners
-                            .entry(policy_id.clone().to_string())
-                            .or_insert(HashMap::new())
-                            .entry(fingerprint)
-                            .or_insert(Vec::new())
-                            .push((address.clone(), adjusted_quantity));
+                            *fingerprint_tallies
+                                .entry(address.clone())
+                                .or_insert(HashMap::new())
+                                .entry(fingerprint.clone())
+                                .or_insert(0_i64) += adjusted_quantity;
+
+                            policy_asset_owners
+                                .entry(hex::encode(policy_id))
+                                .or_insert(HashMap::new())
+                                .entry(fingerprint)
+                                .or_insert(Vec::new())
+                                .push((address.clone(), adjusted_quantity));
+                        }
                     }
-                }
-            };
+                };
+            }
         }
 
         *fingerprint_tallies
@@ -125,10 +130,10 @@ impl Reducer {
 
     fn process_asset_movement(
         &self,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
         soa: &String,
         lovelace: u64,
-        assets: &Vec<Asset>,
+        assets: &Vec<MultiEraPolicyAssets>,
         spending: bool,
         slot: u64,
     ) -> Result<(), gasket::error::Error> {
@@ -201,7 +206,7 @@ impl Reducer {
 
     fn process_received(
         &self,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
         meo: &MultiEraOutput,
         slot: u64,
         rollback: bool,
@@ -220,7 +225,7 @@ impl Reducer {
 
     fn process_spent(
         &self,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
         mei: &MultiEraInput,
         ctx: &model::BlockContext,
         slot: u64,
@@ -248,17 +253,17 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
     ) -> Result<(), gasket::error::Error> {
         let slot = block.slot();
 
         for tx in block.txs() {
             for consumes in tx.consumes().iter() {
-                self.process_spent(output, consumes, ctx, slot, rollback);
+                let _ = self.process_spent(output, consumes, ctx, slot, rollback);
             }
 
-            for (inputIndex, utxoProduced) in tx.produces().iter() {
-                let _ = self.process_received(output, utxoProduced, slot, rollback);
+            for (_, utxo_produced) in tx.produces().iter() {
+                let _ = self.process_received(output, utxo_produced, slot, rollback);
             }
         }
 

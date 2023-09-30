@@ -1,35 +1,47 @@
+use async_trait;
 use pallas::{ledger::traverse::MultiEraBlock, network::miniprotocols::Point};
 
+use crate::model::{CRDTCommand, EnrichedBlockPayload};
 use crate::{crosscut, model, prelude::*};
 
 use super::Reducer;
 
-type InputPort = gasket::messaging::TwoPhaseInputPort<model::EnrichedBlockPayload>;
-type OutputPort = gasket::messaging::OutputPort<model::CRDTCommand>;
+use gasket::framework::{Stage, WorkerError};
+use gasket::messaging::tokio::{InputPort, OutputPort};
 
-pub struct Worker {
-    input: InputPort,
-    output: OutputPort,
-    reducers: Vec<Reducer>,
-    policy: crosscut::policies::RuntimePolicy,
+struct Worker {
+    input: InputPort<EnrichedBlockPayload>,
+    output: OutputPort<CRDTCommand>,
     ops_count: gasket::metrics::Counter,
     last_block: gasket::metrics::Gauge,
 }
 
-impl Worker {
-    pub fn new(
-        reducers: Vec<Reducer>,
-        input: InputPort,
-        output: OutputPort,
-        policy: crosscut::policies::RuntimePolicy,
-    ) -> Self {
+impl Stage for Worker {
+    type Worker = ReducerWorker;
+
+    fn name(&self) -> &str {
+        "reducer"
+    }
+
+    fn metrics(&self) -> gasket::metrics::Registry {
+        let mut registry = gasket::metrics::Registry::default();
+        registry.track_gauge("last_block", &self.last_block);
+        registry.track_counter("ops_count", &self.ops_count);
+    }
+}
+
+pub struct ReducerWorker {
+    reducers: Vec<Reducer>,
+    policy: crosscut::policies::RuntimePolicy,
+}
+
+impl ReducerWorker {
+    fn new(input: InputPort<EnrichedBlockPayload>, output: OutputPort<CRDTCommand>) -> Self {
         Worker {
-            reducers,
             input,
             output,
-            policy,
-            ops_count: Default::default(),
-            last_block: Default::default(),
+            ops_count: gasket::metrics::Counter::new(),
+            last_block: gasket::metrics::Gauge::new(),
         }
     }
 
@@ -78,15 +90,9 @@ impl Worker {
     }
 }
 
-impl gasket::runtime::Worker for Worker {
-    fn metrics(&self) -> gasket::metrics::Registry {
-        gasket::metrics::Builder::new()
-            .with_counter("ops_count", &self.ops_count)
-            .with_gauge("last_block", &self.last_block)
-            .build()
-    }
-
-    fn work(&mut self) -> gasket::runtime::WorkResult {
+#[async_trait::async_trait(?Send)]
+impl gasket::framework::Worker<Worker> for ReducerWorker {
+    async fn execute(&mut self) -> Result<(), WorkerError> {
         let msg = self.input.recv_or_idle()?;
 
         match msg.payload {
@@ -108,6 +114,6 @@ impl gasket::runtime::Worker for Worker {
         }
 
         self.input.commit();
-        Ok(gasket::runtime::WorkOutcome::Partial)
+        Ok(())
     }
 }

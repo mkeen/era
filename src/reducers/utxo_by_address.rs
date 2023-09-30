@@ -3,7 +3,7 @@ use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use pallas::ledger::addresses::{Address, StakeAddress};
 use pallas::ledger::primitives::alonzo::PolicyId;
-use pallas::ledger::traverse::{Asset, MultiEraOutput};
+use pallas::ledger::traverse::{MultiEraAsset, MultiEraOutput};
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraTx, OutputRef};
 use serde::{Deserialize, Serialize};
 
@@ -57,7 +57,7 @@ impl Reducer {
 
     fn tx_state(
         &mut self,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
         soa: &str,
         tx_str: &str,
         should_exist: bool,
@@ -89,7 +89,7 @@ impl Reducer {
 
     fn coin_state(
         &mut self,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
         address: &str,
         tx_str: &str,
         lovelace_amt: &str,
@@ -122,7 +122,7 @@ impl Reducer {
 
     fn token_state(
         &mut self,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
         address: &str,
         tx_str: &str,
         policy_id: &str,
@@ -135,13 +135,7 @@ impl Reducer {
                 model::CRDTCommand::set_add(
                     self.config.key_prefix.as_deref(),
                     tx_str,
-                    format!(
-                        "{}/{}/{}/{}",
-                        address,
-                        hex::encode(policy_id),
-                        fingerprint,
-                        quantity
-                    ),
+                    format!("{}/{}/{}/{}", address, policy_id, fingerprint, quantity),
                 )
                 .into(),
             ),
@@ -150,13 +144,7 @@ impl Reducer {
                 model::CRDTCommand::set_remove(
                     self.config.key_prefix.as_deref(),
                     tx_str,
-                    format!(
-                        "{}/{}/{}/{}",
-                        address,
-                        hex::encode(policy_id),
-                        fingerprint,
-                        quantity
-                    ),
+                    format!("{}/{}/{}/{}", address, policy_id, fingerprint, quantity),
                 )
                 .into(),
             ),
@@ -167,7 +155,7 @@ impl Reducer {
         &mut self,
         ctx: &model::BlockContext,
         input: &OutputRef,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
         rollback: bool,
     ) -> Result<(), gasket::error::Error> {
         let utxo = ctx.find_utxo(input).apply_policy(&self.policy).or_panic()?;
@@ -206,27 +194,31 @@ impl Reducer {
         }
 
         // Spend Native Tokens
-        for asset in utxo.non_ada_assets() {
-            if let Asset::NativeAsset(policy_id, asset_name, quantity) = asset.clone() {
-                let policy_id: String = PolicyId::from(*policy_id).to_string();
-                let asset_name = hex::encode(asset_name);
-
-                if let Ok(fingerprint) =
-                    asset_fingerprint([policy_id.as_str(), asset_name.as_str()])
+        for asset_group in utxo.non_ada_assets() {
+            for asset in asset_group.assets() {
+                if let MultiEraAsset::AlonzoCompatibleOutput(policy_id, asset_name, quantity) =
+                    asset.clone()
                 {
-                    if !fingerprint.is_empty() {
-                        self.token_state(
-                            output,
-                            address.as_str(),
-                            format!("{}#{}", input.hash(), input.index()).as_str(),
-                            policy_id.as_str(),
-                            fingerprint.to_string().as_str(),
-                            quantity.to_string().as_str(),
-                            rollback,
-                        )?;
+                    let asset_name = hex::encode(asset_name.to_vec());
+
+                    if let Ok(fingerprint) =
+                        asset_fingerprint([&hex::encode(policy_id), &asset_name])
+                    {
+                        // todo confirm this check is unneeded
+                        if !fingerprint.is_empty() {
+                            self.token_state(
+                                output,
+                                &address,
+                                format!("{}#{}", input.hash(), input.index()).as_str(),
+                                &hex::encode(policy_id),
+                                &fingerprint,
+                                quantity.to_string().as_str(),
+                                rollback,
+                            )?;
+                        }
                     }
-                }
-            };
+                };
+            }
         }
 
         Ok(())
@@ -237,7 +229,7 @@ impl Reducer {
         tx: &MultiEraTx,
         tx_output: &MultiEraOutput,
         output_idx: usize,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
         rollback: bool,
     ) -> Result<(), gasket::error::Error> {
         if let Ok(raw_address) = &tx_output.address() {
@@ -258,27 +250,31 @@ impl Reducer {
                 }
             }
 
-            for asset in tx_output.non_ada_assets() {
-                if let Asset::NativeAsset(policy_id, asset_name, quantity) = asset {
-                    let asset_name = hex::encode(asset_name);
-                    let policy_id_str = PolicyId::from(*policy_id).to_string();
-
-                    if let Ok(fingerprint) =
-                        asset_fingerprint([policy_id_str.as_str(), asset_name.as_str()])
+            for asset_group in tx_output.non_ada_assets() {
+                for asset in asset_group.assets() {
+                    if let MultiEraAsset::AlonzoCompatibleOutput(policy_id, asset_name, quantity) =
+                        asset
                     {
-                        if !fingerprint.is_empty() {
-                            self.token_state(
-                                output,
-                                tx_address.as_str(),
-                                format!("{}#{}", tx_hash, output_idx).as_str(),
-                                policy_id_str.as_str(),
-                                fingerprint.to_string().as_str(),
-                                quantity.to_string().as_str(),
-                                !rollback,
-                            )?;
+                        let asset_name = hex::encode(asset_name.to_vec());
+                        let policy_id_str = hex::encode(policy_id);
+
+                        if let Ok(fingerprint) =
+                            asset_fingerprint([&policy_id_str, asset_name.as_str()])
+                        {
+                            if !fingerprint.is_empty() {
+                                self.token_state(
+                                    output,
+                                    &tx_address,
+                                    format!("{}#{}", tx_hash, output_idx).as_str(),
+                                    &policy_id_str,
+                                    &fingerprint,
+                                    quantity.to_string().as_str(),
+                                    !rollback,
+                                )?;
+                            }
                         }
-                    }
-                };
+                    };
+                }
             }
 
             let soa = self.stake_or_address_from_address(raw_address);
@@ -298,7 +294,7 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
     ) -> Result<(), gasket::error::Error> {
         for tx in block.txs().into_iter() {
             for consumed in tx.consumes().iter().map(|i| i.output_ref()) {

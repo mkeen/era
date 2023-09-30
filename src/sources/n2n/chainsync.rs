@@ -1,12 +1,12 @@
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraHeader};
-use pallas::network::miniprotocols::chainsync::HeaderContent;
+use pallas::network::miniprotocols::chainsync::{HeaderContent, NextResponse};
 use pallas::network::miniprotocols::{blockfetch, chainsync, Point};
 
-use gasket::error::AsWorkError;
-use pallas::network::multiplexer::StdChannel;
+use gasket::framework::*;
 
+use crate::model::RawBlockPayload;
 use crate::sources::n2n::transport::Transport;
-use crate::{crosscut, model, sources::utils, storage, Error};
+use crate::{crosscut, model, sources, sources::utils, storage, Error};
 
 use crate::prelude::*;
 
@@ -19,64 +19,29 @@ fn to_traverse<'b>(header: &'b HeaderContent) -> Result<MultiEraHeader<'b>, Erro
     .map_err(Error::cbor)
 }
 
-pub type OutputPort = gasket::messaging::OutputPort<model::RawBlockPayload>;
+pub type OutputPort = gasket::messaging::tokio::OutputPort<RawBlockPayload>;
 
 pub struct Worker {
     address: String,
     min_depth: usize,
-    policy: crosscut::policies::RuntimePolicy,
+    chainsync: Option<chainsync::N2NClient>,
+    blockfetch: Option<blockfetch::Client>,
     chain_buffer: chainsync::RollbackBuffer,
-    chain: crosscut::ChainWellKnownInfo,
     blocks: crosscut::historic::BufferBlocks,
-    intersect: crosscut::IntersectConfig,
-    cursor: storage::Cursor,
-    finalize: Option<crosscut::FinalizeConfig>,
-    chainsync: Option<chainsync::N2NClient<StdChannel>>,
-    blockfetch: Option<blockfetch::Client<StdChannel>>,
-    output: OutputPort,
-    block_count: gasket::metrics::Counter,
-    chain_tip: gasket::metrics::Gauge,
 }
 
 impl Worker {
-    pub fn new(
-        address: String,
-        min_depth: usize,
-        policy: crosscut::policies::RuntimePolicy,
-        chain: crosscut::ChainWellKnownInfo,
-        blocks: crosscut::historic::BufferBlocks,
-        intersect: crosscut::IntersectConfig,
-        finalize: Option<crosscut::FinalizeConfig>,
-        cursor: storage::Cursor,
-        output: OutputPort,
-    ) -> Self {
-        Self {
-            address,
-            min_depth,
-            policy,
-            chain,
-            blocks,
-            intersect,
-            finalize,
-            cursor,
-            output,
-            chainsync: None,
-            blockfetch: None,
-            block_count: Default::default(),
-            chain_tip: Default::default(),
-            chain_buffer: chainsync::RollbackBuffer::new(),
-        }
-    }
-
     fn on_roll_forward(
         &mut self,
         content: chainsync::HeaderContent,
+        policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         // parse the header and extract the point of the chain
 
         let header = to_traverse(&content)
-            .apply_policy(&self.policy)
-            .or_panic()?;
+            .apply_policy(policy)
+            .or_panic()
+            .unwrap();
 
         let header = match header {
             Some(x) => x,
@@ -106,7 +71,11 @@ impl Worker {
         }
     }
 
-    fn request_next(&mut self) -> Result<(), gasket::error::Error> {
+    async fn request_next(
+        &mut self,
+        chain_tip: &gasket::metrics::Gauge,
+        policy: &crosscut::policies::RuntimePolicy,
+    ) -> Result<(), gasket::error::Error> {
         log::info!("requesting next block");
 
         let next = self
@@ -114,17 +83,19 @@ impl Worker {
             .as_mut()
             .unwrap()
             .request_next()
-            .or_restart()?;
+            .await
+            .or_restart()
+            .unwrap();
 
         match next {
             chainsync::NextResponse::RollForward(h, t) => {
-                self.on_roll_forward(h)?;
-                self.chain_tip.set(t.1 as i64);
+                self.on_roll_forward(h, policy)?;
+                chain_tip.set(t.1 as i64);
                 Ok(())
             }
             chainsync::NextResponse::RollBackward(p, t) => {
                 self.chain_buffer.roll_back(&p); // just rollback the chain buffer... dont do anything with rollback data on initial sync
-                self.chain_tip.set(t.1 as i64);
+                chain_tip.set(t.1 as i64);
                 Ok(())
             }
             chainsync::NextResponse::Await => {
@@ -134,7 +105,11 @@ impl Worker {
         }
     }
 
-    fn await_next(&mut self) -> Result<(), gasket::error::Error> {
+    async fn await_next(
+        &mut self,
+        chain_tip: &gasket::metrics::Gauge,
+        policy: &crosscut::policies::RuntimePolicy,
+    ) -> Result<(), gasket::error::Error> {
         log::info!("awaiting next block (blocking)");
 
         let next = self
@@ -142,17 +117,19 @@ impl Worker {
             .as_mut()
             .unwrap()
             .recv_while_must_reply()
-            .or_restart()?;
+            .await
+            .or_restart()
+            .unwrap();
 
         match next {
             chainsync::NextResponse::RollForward(h, t) => {
-                self.on_roll_forward(h)?;
-                self.chain_tip.set(t.1 as i64);
+                self.on_roll_forward(h, policy)?;
+                chain_tip.set(t.1 as i64);
                 Ok(())
             }
             chainsync::NextResponse::RollBackward(p, t) => {
                 self.on_rollback(&p)?;
-                self.chain_tip.set(t.1 as i64);
+                chain_tip.set(t.1 as i64);
                 Ok(())
             }
             _ => unreachable!("protocol invariant not respected in chain-sync state machine"),
@@ -160,37 +137,81 @@ impl Worker {
     }
 }
 
-impl gasket::runtime::Worker for Worker {
-    fn metrics(&self) -> gasket::metrics::Registry {
-        gasket::metrics::Builder::new()
-            .with_counter("received_blocks", &self.block_count)
-            .with_gauge("chain_tip", &self.chain_tip)
-            .build()
-    }
+#[derive(Stage)]
+#[stage(
+    name = "n2n-chainsync",
+    unit = "NextResponse<HeaderContent>",
+    worker = "Worker"
+)]
+pub struct Stage {
+    config: sources::n2n::Config,
+    cursor: storage::Cursor,
 
-    fn bootstrap(&mut self) -> Result<(), gasket::error::Error> {
-        let transport = Transport::setup(&self.address, self.chain.magic).or_retry()?;
+    pub output: OutputPort,
+
+    #[metric]
+    chain_tip: gasket::metrics::Gauge,
+
+    #[metric]
+    block_count: gasket::metrics::Counter,
+}
+
+#[async_trait::async_trait(?Send)]
+impl gasket::framework::Worker<Stage> for Worker {
+    async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
+        let transport =
+            Transport::setup(&stage.config.address, stage.config.chain.magic).or_retry()?;
 
         let mut chainsync = chainsync::N2NClient::new(transport.channel2);
 
-        let start =
-            utils::define_chainsync_start(&self.intersect, &mut self.cursor, &mut chainsync)
-                .or_retry()?;
+        let start = utils::define_chainsync_start(
+            &stage.config.intersect,
+            &mut stage.cursor,
+            &mut chainsync,
+        )
+        .await
+        .or_retry()?;
 
         let start = start.ok_or(Error::IntersectNotFound).or_panic()?;
 
-        log::info!("chain-sync intersection is {:?}", start);
-
-        self.chainsync = Some(chainsync);
-
         let blockfetch = blockfetch::Client::new(transport.channel3);
 
-        self.blockfetch = Some(blockfetch);
+        log::info!("chain-sync intersection is {:?}", start);
 
-        Ok(())
+        Ok(Self {
+            address: stage.config.address,
+            min_depth: stage.config.min_depth.unwrap_or(10 as usize),
+            blockfetch: Some(blockfetch),
+            chainsync: Some(chainsync),
+            chain_buffer: chainsync::RollbackBuffer::new(),
+        })
     }
 
-    fn work(&mut self) -> gasket::runtime::WorkResult {
+    async fn schedule(
+        &mut self,
+        stage: &mut Stage,
+    ) -> Result<WorkSchedule<NextResponse<HeaderContent>>, WorkerError> {
+        let client = self.chainsync.as_ref().unwrap();
+
+        let next = match client.has_agency() {
+            true => {
+                log::info!("requesting next block");
+                client.request_next().await.or_restart()?
+            }
+            false => {
+                log::info!("awaiting next block (blocking)");
+                client.recv_while_must_reply().await.or_restart()?
+            }
+        };
+
+        Ok(WorkSchedule::Unit(next))
+    }
+
+    async fn execute(
+        &mut self,
+        unit: &NextResponse<HeaderContent>,
+        stage: &mut Stage,
+    ) -> Result<(), WorkerError> {
         let mut rolled_back = false;
 
         loop {
@@ -200,7 +221,7 @@ impl gasket::runtime::Worker for Worker {
                 if let Some(last_good_block) = self.blocks.get_block_latest() {
                     if let Some(parsed_last_good_block) = MultiEraBlock::decode(&last_good_block)
                         .map_err(crate::Error::cbor)
-                        .apply_policy(&self.policy)
+                        .apply_policy(&stage.config.policy)
                         .unwrap()
                     {
                         rolled_back = true;
@@ -210,13 +231,17 @@ impl gasket::runtime::Worker for Worker {
                             parsed_last_good_block.hash().to_vec(),
                         );
 
-                        self.output.send(model::RawBlockPayload::roll_back(
-                            rollback_cbor,
-                            (point, parsed_last_good_block.number() as i64),
-                            self.blocks.get_current_queue_depth() == 0,
-                        ))?;
+                        stage
+                            .output
+                            .send(model::RawBlockPayload::roll_back(
+                                rollback_cbor,
+                                (point, parsed_last_good_block.number() as i64),
+                                self.blocks.get_current_queue_depth() == 0,
+                            ))
+                            .await
+                            .unwrap();
 
-                        self.block_count.inc(1);
+                        stage.block_count.inc(1);
 
                         // if crosscut::should_finalize(&self.finalize, &last_point) {
                         //     return Ok(gasket::runtime::WorkOutcome::Done);
@@ -229,12 +254,18 @@ impl gasket::runtime::Worker for Worker {
         }
 
         if rolled_back {
-            return Ok(gasket::runtime::WorkOutcome::Partial);
+            return Ok(());
         }
 
         match self.chainsync.as_ref().unwrap().has_agency() {
-            true => self.request_next()?,
-            false => self.await_next()?,
+            true => self
+                .request_next(&stage.chain_tip.clone(), &stage.config.policy)
+                .await
+                .unwrap(),
+            false => self
+                .await_next(&stage.chain_tip.clone(), &stage.config.policy)
+                .await
+                .unwrap(),
         };
 
         // see if we have points that already reached certain depth
@@ -246,22 +277,26 @@ impl gasket::runtime::Worker for Worker {
                 .as_mut()
                 .unwrap()
                 .fetch_single(point.clone())
+                .await
                 .or_restart()?;
 
             self.blocks.insert_block(&point, &block);
 
-            self.output
-                .send(model::RawBlockPayload::roll_forward(block))?;
+            stage
+                .output
+                .send(model::RawBlockPayload::roll_forward(block))
+                .await
+                .unwrap();
 
-            self.block_count.inc(1);
+            stage.block_count.inc(1);
 
             // evaluate if we should finalize the thread according to config
 
-            if crosscut::should_finalize(&self.finalize, &point) {
-                return Ok(gasket::runtime::WorkOutcome::Done);
+            if crosscut::should_finalize(&Some(stage.config.finalize), &point) {
+                return Ok(()); // i think this is effectively a no-op that does nothing now... but this is designed to never shut down anyway... night fully remove should_finalize
             }
         }
 
-        Ok(gasket::runtime::WorkOutcome::Partial)
+        Ok(())
     }
 }

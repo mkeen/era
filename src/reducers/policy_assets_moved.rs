@@ -1,11 +1,10 @@
-use std::str::FromStr;
 use bech32::{ToBase32, Variant};
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
+use std::str::FromStr;
 
 use pallas::crypto::hash::Hash;
-use pallas::ledger::traverse::Asset;
-use pallas::ledger::traverse::MultiEraBlock;
+use pallas::ledger::traverse::{MultiEraAsset, MultiEraBlock, MultiEraPolicyAssets};
 use serde::Deserialize;
 
 use crate::{crosscut, model};
@@ -16,9 +15,7 @@ pub struct Config {
     pub policy_ids_hex: Option<Vec<String>>,
 }
 
-fn asset_fingerprint(
-    data_list: [&str; 2],
-) -> Result<String, bech32::Error> {
+fn asset_fingerprint(data_list: [&str; 2]) -> Result<String, bech32::Error> {
     let combined_parts = data_list.join("");
     let raw = hex::decode(combined_parts).unwrap();
     let mut hasher = Blake2bVar::new(20).unwrap();
@@ -50,7 +47,7 @@ impl Reducer {
         policy: &Hash<28>,
         fingerprint: &str,
         timestamp: &str,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
     ) -> Result<(), gasket::error::Error> {
         if !self.is_policy_id_accepted(&policy) {
             return Ok(());
@@ -61,43 +58,53 @@ impl Reducer {
             None => "policy".to_string(),
         };
 
-        let crdt = model::CRDTCommand::HashSetValue(format!("{}.{}", key, hex::encode(policy)), fingerprint.to_string(), timestamp.to_string().into());
+        let crdt = model::CRDTCommand::HashSetValue(
+            format!("{}.{}", key, hex::encode(policy)),
+            fingerprint.to_string(),
+            timestamp.to_string().into(),
+        );
         output.send(crdt.into())
     }
 
     pub fn reduce_block<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
-        output: &mut super::OutputPort,
+        output: &mut super::OutputPort<()>,
     ) -> Result<(), gasket::error::Error> {
         for tx in block.txs().into_iter() {
             for (_, out) in tx.produces().iter() {
-                for asset in out.non_ada_assets() {
-                    if let Asset::NativeAsset(policy_id, asset_name, _) = asset {
-                        let asset_name = hex::encode(asset_name);
+                for asset_group in out.non_ada_assets() {
+                    for asset in asset_group.assets() {
+                        let asset_name = hex::encode(asset.name());
+                        let policy_hex = hex::encode(asset.policy());
 
-                        if let Ok(fingerprint) = asset_fingerprint([policy_id.clone().to_string().as_str(), asset_name.as_str()]) {
+                        if let Ok(fingerprint) =
+                            asset_fingerprint([&policy_hex, asset_name.as_str()])
+                        {
                             if !fingerprint.is_empty() {
-                                self.process_asset(&policy_id, &fingerprint, &self.time.slot_to_wallclock(block.slot()).to_string(), output)?;
+                                self.process_asset(
+                                    &asset.policy(),
+                                    &fingerprint,
+                                    &self.time.slot_to_wallclock(block.slot()).to_string(),
+                                    output,
+                                )?;
                             }
-
                         }
-
                     }
-
                 }
-
             }
-
         }
 
         Ok(())
     }
-
 }
 
 impl Config {
-    pub fn plugin(self, chain: &crosscut::ChainWellKnownInfo, policy: &crosscut::policies::RuntimePolicy) -> super::Reducer {
+    pub fn plugin(
+        self,
+        chain: &crosscut::ChainWellKnownInfo,
+        policy: &crosscut::policies::RuntimePolicy,
+    ) -> super::Reducer {
         let policy_ids: Option<Vec<Hash<28>>> = match &self.policy_ids_hex {
             Some(pids) => {
                 let ps = pids
