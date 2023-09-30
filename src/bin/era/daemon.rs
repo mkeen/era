@@ -125,7 +125,6 @@ pub fn run(args: &Args) -> Result<(), era::Error> {
     let chain = config.chain.unwrap_or_default().into();
 
     let block_config = config.blocks.unwrap_or_default();
-    let blocks = block_config.clone().into();
     let policy = config.policy.unwrap_or_default().into();
 
     let storage = config.storage.plugin(&chain, &config.intersect, &policy); // Am I supposed to pass the cursor in or no?
@@ -134,7 +133,7 @@ pub fn run(args: &Args) -> Result<(), era::Error> {
 
     let source = config.source.plugin(
         &chain,
-        &blocks,
+        &block_config,
         &config.intersect,
         &config.finalize,
         &policy,

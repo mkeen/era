@@ -20,14 +20,16 @@ impl Config {
     pub fn plugin(
         &mut self,
         chain: &crosscut::ChainWellKnownInfo,
-        blocks: &crosscut::historic::BufferBlocks,
+        block_config: &crosscut::historic::BlockConfig,
         intersect: &crosscut::IntersectConfig,
         finalize: &crosscut::FinalizeConfig,
         policy: &crosscut::policies::RuntimePolicy,
         cursor: &storage::Cursor,
     ) -> n2n::chainsync::Stage {
         match self {
-            Config::N2N(c) => c.bootstrapper(chain, blocks, intersect, finalize, policy, cursor),
+            Config::N2N(c) => {
+                c.bootstrapper(chain, block_config, intersect, finalize, policy, cursor)
+            }
         }
     }
 }

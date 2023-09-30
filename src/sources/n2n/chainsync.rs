@@ -178,12 +178,15 @@ impl gasket::framework::Worker<Stage> for Worker {
 
         log::info!("chain-sync intersection is {:?}", start);
 
+        let blocks = crosscut::historic::BufferBlocks::from(stage.config.block_config);
+
         Ok(Self {
             address: stage.config.address,
             min_depth: stage.config.min_depth.unwrap_or(10 as usize),
             blockfetch: Some(blockfetch),
             chainsync: Some(chainsync),
             chain_buffer: chainsync::RollbackBuffer::new(),
+            blocks: stage.config.block_config.into(),
         })
     }
 

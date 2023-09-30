@@ -36,13 +36,14 @@ pub struct Config {
     pub finalize: crosscut::FinalizeConfig,
     pub intersect: crosscut::IntersectConfig,
     pub chain: crosscut::ChainWellKnownInfo,
+    pub block_config: crosscut::historic::BlockConfig,
 }
 
 impl Config {
     pub fn bootstrapper(
         mut self,
         chain: &crosscut::ChainWellKnownInfo,
-        blocks: &crosscut::historic::BufferBlocks,
+        block_config: &crosscut::historic::BlockConfig,
         intersect: &crosscut::IntersectConfig,
         finalize: &crosscut::FinalizeConfig,
         policy: &crosscut::policies::RuntimePolicy,
@@ -52,6 +53,7 @@ impl Config {
         self.finalize = finalize.clone(); // dk if i need clone, maybe its bad, idk
         self.intersect = intersect.clone();
         self.chain = chain.clone();
+        self.block_config = block_config.clone();
 
         chainsync::Stage {
             config: self,
