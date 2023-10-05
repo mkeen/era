@@ -69,7 +69,7 @@ impl Worker {
     }
 }
 
-pub fn bootstrap(ctx: Context, reducers: Vec<reducers::Config>) -> Stage {
+pub fn bootstrap(ctx: &Context, reducers: Vec<reducers::Config>) -> Stage {
     Stage {
         config: Config {
             policy: ctx.policy.clone(),

@@ -74,10 +74,7 @@ fn should_stop(pipeline: &bootstrap::Pipeline) -> bool {
         .tethers
         .iter()
         .any(|tether| match tether.check_state() {
-            gasket::runtime::TetherState::Alive(x) => match x {
-                gasket::runtime::StageState::StandBy => true,
-                _ => false,
-            },
+            gasket::runtime::TetherState::Alive(x) => false,
             _ => true,
         })
 }
@@ -109,38 +106,25 @@ pub fn run(args: &Args) -> Result<(), era::Error> {
 
     let chain = config.chain.unwrap_or_default().into();
 
-    let policy = config.policy.unwrap_or_default().into();
+    let policy: crosscut::policies::RuntimePolicy = config.policy.unwrap_or_default().into();
 
-    let enrich = config
-        .enrich
-        .unwrap_or_default()
-        .bootstrapper(&policy.clone());
-
-    let storage = config
+    let (cursor, storage) = config
         .storage
-        .plugin(&chain, &config.intersect, &policy.clone());
-
-    let cursor = storage.into();
+        .bootstrapper(&chain, &config.intersect, &policy.clone());
 
     let ctx = bootstrap::Context {
         chain,
         policy,
-        cursor,
-        intersect: &config.intersect,
-        finalize: crosscut::FinalizeConfig,
-        blocks: Some(block_config.into()),
+        intersect: config.intersect,
+        finalize: config.finalize,
+        blocks: block_config.into(),
     };
 
-    let source = config.source.plugin(
-        &chain,
-        &block_config,
-        &config.intersect,
-        &config.finalize,
-        &policy,
-        &storage.cursor,
-    );
+    let enrich = config.enrich.unwrap_or_default().bootstrapper(&ctx);
 
-    let reducer = reducers::worker::bootstrap(policy, chain, config.reducers);
+    let source = config.source.bootstrapper(&ctx, cursor);
+
+    let reducer = reducers::worker::bootstrap(&ctx, config.reducers);
 
     let pipeline = bootstrap::Pipeline::bootstrap(source, enrich, reducer, storage);
 

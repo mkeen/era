@@ -32,18 +32,36 @@ pub enum Stage {
 }
 
 impl Config {
-    pub fn plugin(
+    pub fn bootstrapper(
         self,
         chain: &crosscut::ChainWellKnownInfo,
         intersect: &crosscut::IntersectConfig,
         policy: &crosscut::policies::RuntimePolicy,
-    ) -> Stage {
+    ) -> (Cursor, Option<Bootstrapper>) {
         match self {
-            Config::Skip(w) => Stage::Skip(w.bootstrapper()),
-            Config::Redis(w) => Stage::Redis(w.bootstrapper()),
+            Config::Skip(c) => {
+                let skip = Bootstrapper::Skip(c.clone().bootstrapper());
+                let cursor = skip.build_cursor();
+                (cursor, Some(Bootstrapper::Skip(c.bootstrapper())))
+            }
+            Config::Redis(c) => {
+                let redis_s = Bootstrapper::Redis(c.bootstrapper());
+                let cursor = redis_s.build_cursor();
+                (cursor, Some(Bootstrapper::Redis(c.bootstrapper())))
+            }
 
             #[cfg(feature = "elastic")]
-            Config::Elastic(w) => Stage::Elastic(w.bootstrapper(chain, intersect, policy)),
+            Config::Elastic(c) => {
+                let elastic_s =
+                    Bootstrapper::Elastic(c.clone().bootstrapper(chain, intersect, policy));
+                let cursor = elastic_s.build_cursor();
+                (
+                    cursor,
+                    Some(Bootstrapper::Elastic(
+                        c.bootstrapper(chain, intersect, policy),
+                    )),
+                )
+            }
         }
     }
 }
@@ -78,6 +96,16 @@ pub enum Bootstrapper {
 }
 
 impl Bootstrapper {
+    pub fn build_cursor(self) -> Cursor {
+        match self {
+            Bootstrapper::Skip(x) => Cursor::Skip(x.cursor),
+            Bootstrapper::Redis(x) => Cursor::Redis(x.cursor),
+
+            #[cfg(feature = "elastic")]
+            Bootstrapper::Elastic(x) => Cursor::Elastic(x.cursor),
+        }
+    }
+
     pub fn borrow_input_port(&mut self) -> &'_ mut InputPort<model::CRDTCommand> {
         match self {
             Bootstrapper::Skip(s) => &mut s.input,

@@ -39,14 +39,14 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(self, ctx: &bootstrap::Context) -> chainsync::Stage {
+    pub fn bootstrapper(self, ctx: &bootstrap::Context, cursor: Cursor) -> chainsync::Stage {
         chainsync::Stage {
             config: self,
             output: Default::default(),
             chain_tip: Default::default(),
             block_count: Default::default(),
             intersect: ctx.intersect.clone(),
-            cursor: ctx.cursor.clone(),
+            cursor,
             policy: ctx.policy.clone(),
             chain: ctx.chain.clone(),
             blocks: ctx.blocks.clone().into(),

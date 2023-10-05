@@ -1,4 +1,7 @@
-use crate::{bootstrap, crosscut, model, storage};
+use crate::{
+    bootstrap, crosscut, model,
+    storage::{self, Cursor},
+};
 use gasket::{messaging::tokio::OutputPort, runtime::Tether};
 use serde::Deserialize;
 
@@ -17,9 +20,9 @@ pub enum Config {
 }
 
 impl Config {
-    pub fn bootstrapper(self, ctx: &bootstrap::Context) -> Option<Bootstrapper> {
+    pub fn bootstrapper(self, ctx: &bootstrap::Context, cursor: Cursor) -> Option<Bootstrapper> {
         match self {
-            Config::N2N(c) => Some(Bootstrapper::N2N(c.bootstrapper(ctx))),
+            Config::N2N(c) => Some(Bootstrapper::N2N(c.bootstrapper(ctx, cursor))),
         }
     }
 }

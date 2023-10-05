@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use gasket::{
     messaging::tokio::connect_ports,
     retries,
-    runtime::{Policy, Tether},
+    runtime::{spawn_stage, Policy, Tether},
 };
 
 pub struct Pipeline {
@@ -15,11 +15,15 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub fn bootstrap(
-        mut source: sources::Bootstrapper,
-        mut enrich: enrich::Bootstrapper,
-        mut reducer: reducers::Bootstrapper,
-        mut storage: storage::Bootstrapper,
+        mut source: Option<sources::Bootstrapper>,
+        mut enrich: Option<enrich::Bootstrapper>,
+        mut reducer: reducers::worker::Stage,
+        mut storage: Option<storage::Bootstrapper>,
     ) -> Self {
+        let source = source.unwrap();
+        let enrich = enrich.unwrap();
+        let storage = storage.unwrap();
+
         let mut pipe = Self {
             tethers: Vec::new(),
             policy: Policy {
@@ -43,43 +47,26 @@ impl Pipeline {
         &mut self,
         mut source: sources::Bootstrapper,
         mut enrich: enrich::Bootstrapper,
-        mut reducer: reducers::Bootstrapper,
+        mut reducer: reducers::worker::Stage,
         mut storage: storage::Bootstrapper,
     ) {
+        let reducer_input = &mut reducer.input;
         connect_ports(source.borrow_output_port(), enrich.borrow_input_port(), 100);
 
-        connect_ports(
-            enrich.borrow_output_port(),
-            reducer.borrow_input_port(),
-            100,
-        );
+        connect_ports(enrich.borrow_output_port(), reducer_input, 100);
 
-        connect_ports(
-            enrich.borrow_output_port(),
-            reducer.borrow_input_port(),
-            100,
-        );
-
-        connect_ports(
-            reducer.borrow_output_port(),
-            storage.borrow_input_port(),
-            100,
-        );
+        connect_ports(&mut reducer.output, storage.borrow_input_port(), 100);
 
         self.register_stage(storage.spawn_stage(self));
-
         self.register_stage(source.spawn_stage(self));
-
         self.register_stage(enrich.spawn_stage(self));
-
-        self.register_stage(reducer.spawn_stage(self));
+        self.register_stage(spawn_stage(reducer, self.policy.clone()));
     }
 }
 
 pub struct Context {
     pub chain: crosscut::ChainWellKnownInfo,
     pub intersect: crosscut::IntersectConfig,
-    pub cursor: storage::Cursor,
     pub finalize: Option<crosscut::FinalizeConfig>,
     pub blocks: crosscut::historic::BlockConfig,
     pub policy: crosscut::policies::RuntimePolicy,
