@@ -30,14 +30,9 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(
-        self,
-        chain: &crosscut::ChainWellKnownInfo,
-        intersect: &crosscut::IntersectConfig,
-        policy: &crosscut::policies::RuntimePolicy,
-    ) -> Stage {
+    pub fn bootstrapper(&self) -> Stage {
         Stage {
-            config: self,
+            config: self.clone(),
             cursor: Cursor {
                 config: self.clone(),
             },
@@ -51,6 +46,7 @@ impl Config {
     }
 }
 
+#[derive(Clone)]
 pub struct Cursor {
     config: Config,
 }
@@ -78,7 +74,7 @@ impl Cursor {
 #[stage(name = "storage-redis", unit = "CRDTCommand", worker = "Worker")]
 pub struct Stage {
     config: Config,
-    cursor: Cursor,
+    pub cursor: Cursor,
 
     pub input: InputPort<CRDTCommand>,
 
@@ -86,7 +82,7 @@ pub struct Stage {
     ops_count: gasket::metrics::Counter,
 }
 
-struct Worker {
+pub struct Worker {
     connection: Option<redis::Connection>,
 }
 
@@ -280,7 +276,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                 self.connection.as_mut().unwrap().del(key).or_restart()?;
             }
             model::CRDTCommand::BlockFinished(point, finalize) => {
-                let cursor_str = crosscut::PointArg::from(*point).to_string();
+                let cursor_str = crosscut::PointArg::from(point.clone()).to_string();
 
                 if *finalize {
                     self.connection

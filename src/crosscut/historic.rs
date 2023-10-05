@@ -27,6 +27,7 @@ impl From<BlockConfig> for BufferBlocks {
 
 #[derive(Clone)]
 pub struct BufferBlocks {
+    pub config: BlockConfig,
     db: Option<sled::Db>,
     db_depth: Option<usize>,
     queue: Vec<(String, Vec<u8>)>,
@@ -34,10 +35,11 @@ pub struct BufferBlocks {
 
 impl BufferBlocks {
     fn open_db(config: BlockConfig) -> Self {
-        let db = sled::open(config.db_path).or_retry().unwrap();
+        let db = sled::open(config.clone().db_path).or_retry().unwrap();
         let queue: Vec<(String, Vec<u8>)> = Vec::default();
 
         BufferBlocks {
+            config,
             db_depth: Some(db.len() as usize), // o(n) to get the initial size, but should only be called once
             db: Some(db),
             queue,

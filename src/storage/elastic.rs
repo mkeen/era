@@ -46,15 +46,20 @@ impl Config {
         policy: &crosscut::policies::RuntimePolicy,
     ) -> Stage {
         Stage {
-            config: self,
+            config: self.clone(),
             input: Default::default(),
             ops_count: Default::default(),
-            cursor: Cursor {},
+            cursor: Cursor {
+                config: self.clone(),
+            },
         }
     }
 }
 
-pub struct Cursor {}
+#[derive(Clone)]
+pub struct Cursor {
+    config: Config,
+}
 
 impl Cursor {
     pub fn last_point(&mut self) -> Result<Option<crosscut::PointArg>, crate::Error> {
@@ -160,7 +165,7 @@ async fn apply_batch(
 )]
 pub struct Stage {
     config: Config,
-    cursor: Cursor,
+    pub cursor: Cursor,
 
     pub input: InputPort<CRDTCommand>,
 
@@ -168,7 +173,7 @@ pub struct Stage {
     ops_count: gasket::metrics::Counter,
 }
 
-struct Worker {
+pub struct Worker {
     client: Option<Elasticsearch>,
 }
 

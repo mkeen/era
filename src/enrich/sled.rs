@@ -28,12 +28,8 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(
-        mut self,
-        policy: &crosscut::policies::RuntimePolicy,
-        blocks: &crosscut::historic::BlockConfig,
-    ) -> Stage {
-        self.rollback_db_path = Some(blocks.rollback_db_path.clone());
+    pub fn bootstrapper(mut self, ctx: &bootstrap::Context) -> Stage {
+        self.rollback_db_path = Some(ctx.blocks.rollback_db_path.clone());
 
         Stage {
             config: self,
@@ -85,12 +81,12 @@ fn fetch_referenced_utxo<'a>(
     }
 }
 
-struct Sled {
+pub struct Worker {
     enrich_db: Option<sled::Db>,
     rollback_db: Option<sled::Db>,
 }
 
-impl Sled {
+impl Worker {
     fn db_refs_all(&self) -> Result<Option<(&sled::Db, &sled::Db)>, ()> {
         match (self.db_ref_enrich(), self.db_ref_rollback()) {
             (Some(db), Some(consumed_ring)) => Ok(Some((db, consumed_ring))),
@@ -257,24 +253,20 @@ impl Sled {
 #[derive(Stage)]
 #[stage(name = "enrich-sled", unit = "RawBlockPayload", worker = "Worker")]
 pub struct Stage {
-    config: Config,
+    pub config: Config,
 
     pub input: InputPort<RawBlockPayload>,
     pub output: OutputPort<EnrichedBlockPayload>,
 
     #[metric]
-    inserts_count: gasket::metrics::Counter,
-    blocks_counter: gasket::metrics::Counter,
-}
-
-pub struct Worker {
-    sled: Sled,
+    pub inserts_count: gasket::metrics::Counter,
+    pub blocks_counter: gasket::metrics::Counter,
 }
 
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Worker {
     async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
-        let sled = Sled {
+        let sled = Worker {
             enrich_db: Some(
                 sled::open(&stage.config.db_path.clone())
                     .or_retry()
@@ -288,7 +280,8 @@ impl gasket::framework::Worker<Stage> for Worker {
         };
 
         log::warn!("finished opening enrich databases");
-        Ok(Self { sled })
+
+        Ok(sled)
     }
 
     async fn schedule(
@@ -304,7 +297,7 @@ impl gasket::framework::Worker<Stage> for Worker {
         unit: &RawBlockPayload,
         stage: &mut Stage,
     ) -> Result<(), WorkerError> {
-        let all_dbs = self.sled.db_refs_all().unwrap();
+        let all_dbs = self.db_refs_all().unwrap();
 
         if let Some((db, consumed_ring)) = all_dbs {
             match unit {
@@ -321,18 +314,20 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                     let txs = &block.txs();
 
-                    self.sled.insert_produced_utxos(db, txs).or_panic()?;
-                    let ctx = self.sled.par_fetch_referenced_utxos(db, &txs).or_panic()?;
+                    self.insert_produced_utxos(db, txs).or_panic()?;
+                    let ctx = self.par_fetch_referenced_utxos(db, &txs).or_panic()?;
 
                     // and finally we remove utxos consumed by the block
-                    self.sled
-                        .remove_consumed_utxos(db, consumed_ring, &txs)
+                    self.remove_consumed_utxos(db, consumed_ring, &txs)
                         .expect("todo panic");
+
+                    stage.blocks_counter.inc(1);
 
                     stage
                         .output
-                        .send(model::EnrichedBlockPayload::roll_forward(*cbor, ctx))
-                        .await;
+                        .send(model::EnrichedBlockPayload::roll_forward(cbor.clone(), ctx))
+                        .await
+                        .or_panic()
                 }
 
                 model::RawBlockPayload::RollBack(cbor, last_known_block_info, finalize) => {
@@ -345,36 +340,33 @@ impl gasket::framework::Worker<Stage> for Worker {
                             let txs = block.txs();
 
                             // Revert Anything to do with this block
-                            self.sled
-                                .remove_produced_utxos(db, &txs)
+                            self.remove_produced_utxos(db, &txs)
                                 .expect("todo: panic error");
-                            self.sled
-                                .replace_consumed_utxos(db, consumed_ring, &txs)
+                            self.replace_consumed_utxos(db, consumed_ring, &txs)
                                 .expect("todo: panic error");
 
-                            let ctx = self
-                                .sled
-                                .par_fetch_referenced_utxos(db, &txs)
-                                .or_restart()?;
+                            let ctx = self.par_fetch_referenced_utxos(db, &txs).or_restart()?;
 
-                            stage
+                            return stage
                                 .output
                                 .send(model::EnrichedBlockPayload::roll_back(
-                                    *cbor,
+                                    cbor.clone(),
                                     ctx,
-                                    *last_known_block_info,
-                                    *finalize,
+                                    last_known_block_info.clone(),
+                                    finalize.clone(),
                                 ))
-                                .await;
+                                .await
+                                .or_panic();
                         }
                     }
 
                     stage.blocks_counter.inc(1);
+
+                    Ok(())
                 }
             };
         }
 
-        // todo propagate the workererror from above down here
         Ok(())
     }
 }

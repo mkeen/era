@@ -1,6 +1,6 @@
+use crate::{bootstrap, crosscut, model, storage};
+use gasket::{messaging::tokio::OutputPort, runtime::Tether};
 use serde::Deserialize;
-
-use crate::{crosscut, storage};
 
 // #[cfg(target_family = "unix")]
 // pub mod n2c;
@@ -17,24 +17,27 @@ pub enum Config {
 }
 
 impl Config {
-    pub fn plugin(
-        &mut self,
-        chain: &crosscut::ChainWellKnownInfo,
-        block_config: &crosscut::historic::BlockConfig,
-        intersect: &crosscut::IntersectConfig,
-        finalize: &crosscut::FinalizeConfig,
-        policy: &crosscut::policies::RuntimePolicy,
-        cursor: &storage::Cursor,
-    ) -> n2n::chainsync::Stage {
+    pub fn bootstrapper(self, ctx: &bootstrap::Context) -> Option<Bootstrapper> {
         match self {
-            Config::N2N(c) => {
-                c.bootstrapper(chain, block_config, intersect, finalize, policy, cursor)
-            }
+            Config::N2N(c) => Some(Bootstrapper::N2N(c.bootstrapper(ctx))),
         }
     }
 }
 
-pub enum Stage {
-    N2N(n2n::Bootstrapper),
-    // N2C(n2c::Bootstrapper),
+pub enum Bootstrapper {
+    N2N(n2n::chainsync::Stage),
+}
+
+impl Bootstrapper {
+    pub fn borrow_output_port(&mut self) -> &'_ mut OutputPort<model::RawBlockPayload> {
+        match self {
+            Bootstrapper::N2N(s) => &mut s.output,
+        }
+    }
+
+    pub fn spawn_stage(self, pipeline: &bootstrap::Pipeline) -> Tether {
+        match self {
+            Bootstrapper::N2N(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),
+        }
+    }
 }

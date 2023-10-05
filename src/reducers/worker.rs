@@ -1,119 +1,162 @@
 use async_trait;
 use pallas::{ledger::traverse::MultiEraBlock, network::miniprotocols::Point};
 
+use crate::bootstrap::Context;
 use crate::model::{CRDTCommand, EnrichedBlockPayload};
-use crate::{crosscut, model, prelude::*};
+use crate::{crosscut, model, prelude::*, reducers, storage};
 
 use super::Reducer;
 
-use gasket::framework::{Stage, WorkerError};
+use gasket::framework::*;
 use gasket::messaging::tokio::{InputPort, OutputPort};
 
-struct Worker {
-    input: InputPort<EnrichedBlockPayload>,
-    output: OutputPort<CRDTCommand>,
-    ops_count: gasket::metrics::Counter,
-    last_block: gasket::metrics::Gauge,
-}
-
-impl Stage for Worker {
-    type Worker = ReducerWorker;
-
-    fn name(&self) -> &str {
-        "reducer"
-    }
-
-    fn metrics(&self) -> gasket::metrics::Registry {
-        let mut registry = gasket::metrics::Registry::default();
-        registry.track_gauge("last_block", &self.last_block);
-        registry.track_counter("ops_count", &self.ops_count);
-    }
-}
-
-pub struct ReducerWorker {
-    reducers: Vec<Reducer>,
+struct Config {
     policy: crosscut::policies::RuntimePolicy,
+    chain: crosscut::ChainWellKnownInfo,
 }
 
-impl ReducerWorker {
-    fn new(input: InputPort<EnrichedBlockPayload>, output: OutputPort<CRDTCommand>) -> Self {
-        Worker {
-            input,
-            output,
-            ops_count: gasket::metrics::Counter::new(),
-            last_block: gasket::metrics::Gauge::new(),
-        }
-    }
+pub struct Worker {}
 
-    fn reduce_block<'b>(
+impl Worker {
+    async fn reduce_block<'b>(
         &mut self,
+        policy: crosscut::policies::RuntimePolicy,
         block: &'b Vec<u8>,
         rollback: bool,
         ctx: &model::BlockContext,
         last_good_block_rollback_info: (Point, i64),
         final_block_in_rollback_batch: bool,
-    ) -> Result<(), gasket::error::Error> {
+        output: &mut OutputPort<CRDTCommand>,
+        reducers: &mut Vec<Reducer>,
+    ) -> Option<i64> {
         let block = MultiEraBlock::decode(block)
             .map_err(crate::Error::cbor)
-            .apply_policy(&self.policy)
-            .or_panic()?;
+            .apply_policy(&policy.clone())
+            .or_panic()
+            .unwrap();
 
-        let block = match block {
-            Some(x) => x,
-            None => return Ok(()),
-        };
+        if let Some(block) = block {
+            let (point, block_number) = match rollback {
+                true => last_good_block_rollback_info,
+                false => (
+                    Point::Specific(block.slot(), block.hash().to_vec()),
+                    block.number() as i64,
+                ),
+            };
 
-        let (point, block_number) = match rollback {
-            true => last_good_block_rollback_info,
-            false => (
-                Point::Specific(block.slot(), block.hash().to_vec()),
-                block.number() as i64,
-            ),
-        };
+            output
+                .send(model::CRDTCommand::block_starting(&block).into())
+                .await;
 
-        self.last_block.set(block_number);
+            for reducer in reducers {
+                reducer.reduce_block(&block, ctx, rollback, output).await;
+            }
 
-        self.output.send(gasket::messaging::Message::from(
-            model::CRDTCommand::block_starting(&block),
-        ))?;
+            output
+                .send(
+                    model::CRDTCommand::block_finished(
+                        point,
+                        !rollback || final_block_in_rollback_batch,
+                    )
+                    .into(),
+                )
+                .await;
 
-        for reducer in self.reducers.iter_mut() {
-            reducer.reduce_block(&block, ctx, rollback, &mut self.output)?;
-            self.ops_count.inc(1);
+            Some(block_number)
+        } else {
+            None
         }
-
-        self.output.send(gasket::messaging::Message::from(
-            model::CRDTCommand::block_finished(point, !rollback || final_block_in_rollback_batch),
-        ))?;
-
-        Ok(())
     }
 }
 
-#[async_trait::async_trait(?Send)]
-impl gasket::framework::Worker<Worker> for ReducerWorker {
-    async fn execute(&mut self) -> Result<(), WorkerError> {
-        let msg = self.input.recv_or_idle()?;
+pub fn bootstrap(ctx: Context, reducers: Vec<reducers::Config>) -> Stage {
+    Stage {
+        config: Config {
+            policy: ctx.policy.clone(),
+            chain: ctx.chain.clone(),
+        },
+        reducers: reducers.into_iter().map(|x| x.bootstrapper(&ctx)).collect(),
+        input: Default::default(),
+        output: Default::default(),
+        chain_tip: Default::default(),
+        ops_count: Default::default(),
+    }
+}
 
-        match msg.payload {
+#[derive(Stage)]
+#[stage(
+    name = "n2n-reducers",
+    unit = "EnrichedBlockPayload",
+    worker = "Worker"
+)]
+pub struct Stage {
+    config: Config,
+
+    reducers: Vec<Reducer>,
+
+    pub input: InputPort<EnrichedBlockPayload>,
+    pub output: OutputPort<CRDTCommand>,
+
+    #[metric]
+    chain_tip: gasket::metrics::Gauge,
+
+    #[metric]
+    ops_count: gasket::metrics::Counter,
+}
+
+#[async_trait::async_trait(?Send)]
+impl gasket::framework::Worker<Stage> for Worker {
+    async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
+        Ok(Self {})
+    }
+
+    async fn schedule(
+        &mut self,
+        stage: &mut Stage,
+    ) -> Result<WorkSchedule<EnrichedBlockPayload>, WorkerError> {
+        let msg = stage.input.recv().await.unwrap();
+        Ok(WorkSchedule::Unit(msg.payload))
+    }
+
+    async fn execute(
+        &mut self,
+        unit: &EnrichedBlockPayload,
+        stage: &mut Stage,
+    ) -> Result<(), WorkerError> {
+        match unit {
             model::EnrichedBlockPayload::RollForward(block, ctx) => {
-                self.reduce_block(&block, false, &ctx, (Point::Origin, 0), false)?
+                self.reduce_block(
+                    stage.config.policy.clone(),
+                    &block,
+                    false,
+                    &ctx,
+                    (Point::Origin, 0),
+                    false,
+                    &mut stage.output,
+                    &mut stage.reducers,
+                )
+                .await;
             }
             model::EnrichedBlockPayload::RollBack(
                 block,
                 ctx,
                 last_block_rollback_info,
                 final_block_in_batch,
-            ) => self.reduce_block(
-                &block,
-                true,
-                &ctx,
-                last_block_rollback_info,
-                final_block_in_batch,
-            )?,
+            ) => {
+                self.reduce_block(
+                    stage.config.policy.clone(),
+                    &block,
+                    true,
+                    &ctx,
+                    last_block_rollback_info.clone(),
+                    final_block_in_batch.clone(),
+                    &mut stage.output,
+                    &mut stage.reducers,
+                )
+                .await;
+            }
         }
 
-        self.input.commit();
         Ok(())
     }
 }

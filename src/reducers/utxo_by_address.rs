@@ -7,6 +7,9 @@ use pallas::ledger::traverse::{MultiEraAsset, MultiEraOutput};
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraTx, OutputRef};
 use serde::{Deserialize, Serialize};
 
+use gasket::messaging::tokio::{InputPort, OutputPort};
+
+use crate::model::CRDTCommand;
 use crate::{crosscut, model, prelude::*};
 
 #[derive(Deserialize)]
@@ -57,7 +60,7 @@ impl Reducer {
 
     fn tx_state(
         &mut self,
-        output: &mut super::OutputPort<()>,
+        output: &mut OutputPort<CRDTCommand>,
         soa: &str,
         tx_str: &str,
         should_exist: bool,
@@ -89,7 +92,7 @@ impl Reducer {
 
     fn coin_state(
         &mut self,
-        output: &mut super::OutputPort<()>,
+        output: &mut OutputPort<CRDTCommand>,
         address: &str,
         tx_str: &str,
         lovelace_amt: &str,
@@ -122,7 +125,7 @@ impl Reducer {
 
     fn token_state(
         &mut self,
-        output: &mut super::OutputPort<()>,
+        output: &mut OutputPort<CRDTCommand>,
         address: &str,
         tx_str: &str,
         policy_id: &str,
@@ -148,24 +151,26 @@ impl Reducer {
                 )
                 .into(),
             ),
-        }
+        };
+
+        Ok(())
     }
 
     fn process_consumed_txo(
         &mut self,
         ctx: &model::BlockContext,
         input: &OutputRef,
-        output: &mut super::OutputPort<()>,
+        output: &mut OutputPort<CRDTCommand>,
         rollback: bool,
     ) -> Result<(), gasket::error::Error> {
-        let utxo = ctx.find_utxo(input).apply_policy(&self.policy).or_panic()?;
+        let utxo = ctx.find_utxo(input).apply_policy(&self.policy).unwrap();
 
         let utxo = match utxo {
             Some(x) => x,
             None => return Ok(()),
         };
 
-        let address = utxo.address().map(|x| x.to_string()).or_panic()?;
+        let address = utxo.address().map(|x| x.to_string()).unwrap();
 
         if let Some(addresses) = &self.config.filter {
             if let Err(_) = addresses.binary_search(&address) {
@@ -229,7 +234,7 @@ impl Reducer {
         tx: &MultiEraTx,
         tx_output: &MultiEraOutput,
         output_idx: usize,
-        output: &mut super::OutputPort<()>,
+        output: &mut OutputPort<CRDTCommand>,
         rollback: bool,
     ) -> Result<(), gasket::error::Error> {
         if let Ok(raw_address) = &tx_output.address() {
@@ -289,12 +294,12 @@ impl Reducer {
         Ok(())
     }
 
-    pub fn reduce_block<'b>(
+    pub async fn reduce_block<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &mut super::OutputPort<()>,
+        output: &mut OutputPort<CRDTCommand>,
     ) -> Result<(), gasket::error::Error> {
         for tx in block.txs().into_iter() {
             for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
@@ -313,10 +318,10 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(self, policy: &crosscut::policies::RuntimePolicy) -> super::Reducer {
+    pub fn plugin(self, policy: crosscut::policies::RuntimePolicy) -> super::Reducer {
         let reducer = Reducer {
             config: self,
-            policy: policy.clone(),
+            policy,
         };
 
         super::Reducer::UtxoByAddress(reducer)

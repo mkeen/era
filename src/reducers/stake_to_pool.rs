@@ -3,7 +3,9 @@ use pallas::ledger::primitives::alonzo::{PoolKeyhash, StakeCredential};
 use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
 
-use crate::model;
+use gasket::messaging::tokio::OutputPort;
+
+use crate::model::CRDTCommand;
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -15,12 +17,7 @@ pub struct Reducer {
 }
 
 impl Reducer {
-    fn registration(
-        &mut self,
-        cred: &StakeCredential,
-        pool: &PoolKeyhash,
-        output: &mut super::OutputPort<()>,
-    ) -> Result<(), gasket::error::Error> {
+    fn registration(&mut self, cred: &StakeCredential, pool: &PoolKeyhash) -> CRDTCommand {
         let key = match cred {
             StakeCredential::AddrKeyhash(x) => x.to_string(),
             StakeCredential::Scripthash(x) => x.to_string(),
@@ -28,36 +25,23 @@ impl Reducer {
 
         let value = pool.to_string();
 
-        let crdt =
-            model::CRDTCommand::any_write_wins(self.config.key_prefix.as_deref(), &key, value);
-
-        output.send(gasket::messaging::Message::from(crdt))?;
-
-        Ok(())
+        CRDTCommand::any_write_wins(self.config.key_prefix.as_deref(), &key, value)
     }
 
-    fn deregistration(
-        &mut self,
-        cred: &StakeCredential,
-        output: &mut super::OutputPort<()>,
-    ) -> Result<(), gasket::error::Error> {
+    fn deregistration(&mut self, cred: &StakeCredential) -> CRDTCommand {
         let key = match cred {
             StakeCredential::AddrKeyhash(x) => x.to_string(),
             StakeCredential::Scripthash(x) => x.to_string(),
         };
 
-        let crdt = model::CRDTCommand::spoil(self.config.key_prefix.as_deref(), &key);
-
-        output.send(gasket::messaging::Message::from(crdt))?;
-
-        Ok(())
+        CRDTCommand::spoil(self.config.key_prefix.as_deref(), &key)
     }
 
-    pub fn reduce_block<'b>(
+    pub async fn reduce_block<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
         rollback: bool,
-        output: &mut super::OutputPort<()>,
+        output: &mut OutputPort<CRDTCommand>,
     ) -> Result<(), gasket::error::Error> {
         for tx in block.txs() {
             if tx.is_valid() {
@@ -66,16 +50,15 @@ impl Reducer {
                         match cert {
                             alonzo::Certificate::StakeDelegation(cred, pool) => {
                                 if !rollback {
-                                    self.registration(cred, pool, output)?
+                                    output.send(self.registration(cred, pool).into()).await;
                                 } else {
-                                    self.deregistration(cred, output)?
+                                    output.send(self.deregistration(cred).into()).await;
                                 }
                             }
 
                             alonzo::Certificate::StakeDeregistration(cred) => {
                                 if !rollback {
-                                    self.deregistration(cred, output)?
-                                } else {
+                                    output.send(self.deregistration(cred).into()).await;
                                 }
                             }
 

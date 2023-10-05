@@ -155,6 +155,10 @@ pub enum CRDTCommand {
 }
 
 impl CRDTCommand {
+    pub fn into(self) -> gasket::messaging::Message<CRDTCommand> {
+        gasket::messaging::Message { payload: self }
+    }
+
     pub fn block_starting(block: &MultiEraBlock) -> CRDTCommand {
         let hash = block.hash();
         let slot = block.slot();

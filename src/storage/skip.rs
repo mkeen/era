@@ -11,40 +11,38 @@ use crate::{crosscut, model::CRDTCommand};
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
-    last_point: Option<crosscut::PointArg>,
+    last_point: crosscut::PointArg,
 }
 
 impl Config {
     pub fn bootstrapper(self) -> Stage {
         Stage {
-            config: self,
+            config: self.clone(),
             input: Default::default(),
-            cursor: Cursor {
-                last_point: Arc::new(Mutex::new(None)),
-            },
+            cursor: Cursor { last_point: None },
             ops_count: Default::default(),
         }
     }
 }
 
+#[derive(Clone)]
 pub struct Cursor {
-    last_point: Arc<Mutex<Option<crosscut::PointArg>>>,
+    last_point: Option<crosscut::PointArg>,
 }
 
 impl Cursor {
     pub fn last_point(&self) -> Result<Option<crosscut::PointArg>, crate::Error> {
-        let value = self.last_point.lock().unwrap();
-        Ok(value.clone())
+        Ok(None)
     }
 }
 
-struct Worker {}
+pub struct Worker {}
 
 #[derive(Stage)]
 #[stage(name = "storage-skip", unit = "CRDTCommand", worker = "Worker")]
 pub struct Stage {
     config: Config,
-    cursor: Cursor,
+    pub cursor: Cursor,
 
     pub input: InputPort<CRDTCommand>,
 

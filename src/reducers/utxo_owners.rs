@@ -7,6 +7,7 @@ use pallas::ledger::traverse::{MultiEraOutput, OriginalHash};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::model::EnrichedBlockPayload;
 use crate::{crosscut, model, prelude::*};
 
 #[derive(Deserialize)]
@@ -95,12 +96,12 @@ impl Reducer {
         None
     }
 
-    pub fn reduce_block<'b>(
+    pub async fn reduce_block<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &mut super::OutputPort<()>,
+        output: &mut super::OutputPort<model::CRDTCommand>,
     ) -> Result<(), gasket::error::Error> {
         if rollback {
             return Ok(());
@@ -113,9 +114,12 @@ impl Reducer {
                     if let Some((key, value)) =
                         self.get_key_value(&utxo, &tx, &(consumed.hash().clone(), consumed.index()))
                     {
-                        output.send(
-                            model::CRDTCommand::set_remove(prefix, &key.as_str(), value).into(),
-                        )?;
+                        output
+                            .send(
+                                model::CRDTCommand::set_remove(prefix, &key.as_str(), value).into(),
+                            )
+                            .await
+                            .unwrap();
                     }
                 }
             }
@@ -123,7 +127,10 @@ impl Reducer {
             for (index, produced) in tx.produces() {
                 let output_ref = (tx.hash().clone(), index as u64);
                 if let Some((key, value)) = self.get_key_value(&produced, &tx, &output_ref) {
-                    output.send(model::CRDTCommand::set_add(None, &key, value).into())?;
+                    output
+                        .send(model::CRDTCommand::set_add(prefix, &key, value).into())
+                        .await
+                        .unwrap();
                 }
             }
         }
@@ -133,10 +140,10 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(self, policy: &crosscut::policies::RuntimePolicy) -> super::Reducer {
+    pub fn plugin(self, policy: crosscut::policies::RuntimePolicy) -> super::Reducer {
         let reducer = Reducer {
             config: self,
-            policy: policy.clone(),
+            policy,
         };
 
         super::Reducer::UtxoOwners(reducer)

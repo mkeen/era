@@ -1,10 +1,11 @@
 use std::time::Duration;
 
 use gasket::messaging::tokio::{InputPort, OutputPort};
-use gasket::runtime::spawn_stage;
+use gasket::runtime::{spawn_stage, Tether};
 use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
 
+use crate::bootstrap::Context;
 use crate::model::{CRDTCommand, EnrichedBlockPayload};
 use crate::{bootstrap, crosscut, model};
 
@@ -19,7 +20,7 @@ pub mod stake_to_pool;
 pub mod utxo_by_address;
 pub mod utxo_owners;
 
-mod worker;
+pub mod worker;
 
 #[derive(Deserialize)]
 #[serde(tag = "type")]
@@ -35,54 +36,17 @@ pub enum Config {
 }
 
 impl Config {
-    fn plugin(
-        self,
-        chain: &crosscut::ChainWellKnownInfo,
-        policy: &crosscut::policies::RuntimePolicy,
-    ) -> Reducer {
+    fn bootstrapper(self, ctx: &Context) -> Reducer {
         match self {
-            Config::UtxoOwners(c) => c.plugin(policy),
-            Config::UtxoByAddress(c) => c.plugin(policy),
-            Config::Parameters(c) => c.plugin(chain),
-            Config::AssetMetadata(c) => c.plugin(chain, policy),
-            Config::PolicyAssetsMoved(c) => c.plugin(chain, policy),
-            Config::MultiAssetBalances(c) => c.plugin(chain, policy),
-            Config::AdaHandle(c) => c.plugin(chain),
+            Config::UtxoOwners(c) => c.plugin(ctx.policy.clone()),
+            Config::UtxoByAddress(c) => c.plugin(ctx.policy.clone()),
+            Config::Parameters(c) => c.plugin(ctx.chain.clone()),
+            Config::AssetMetadata(c) => c.plugin(ctx.chain.clone(), ctx.policy.clone()),
+            Config::PolicyAssetsMoved(c) => c.plugin(ctx.chain.clone(), ctx.policy.clone()),
+            Config::MultiAssetBalances(c) => c.plugin(ctx),
+            Config::AdaHandle(c) => c.plugin(ctx.chain.clone()),
             Config::StakeToPool(c) => c.plugin(),
         }
-    }
-}
-
-pub struct Bootstrapper {
-    input: InputPort<EnrichedBlockPayload>,
-    output: OutputPort<CRDTCommand>,
-    reducers: Vec<Reducer>,
-    policy: crosscut::policies::RuntimePolicy,
-}
-
-impl Bootstrapper {
-    pub fn new(
-        configs: Vec<Config>,
-        chain: &crosscut::ChainWellKnownInfo,
-        policy: &crosscut::policies::RuntimePolicy,
-    ) -> Self {
-        Self {
-            reducers: configs
-                .into_iter()
-                .map(|x| x.plugin(chain, policy))
-                .collect(),
-            input: Default::default(),
-            output: Default::default(),
-            policy: policy.clone(),
-        }
-    }
-
-    pub fn borrow_input_port(&mut self) -> &'_ mut InputPort<EnrichedBlockPayload> {
-        &mut self.input
-    }
-
-    pub fn borrow_output_port(&mut self) -> &'_ mut OutputPort<CRDTCommand> {
-        &mut self.output
     }
 }
 
@@ -97,8 +61,10 @@ pub enum Reducer {
     StakeToPool(stake_to_pool::Reducer),
 }
 
+struct Stub {}
+
 impl Reducer {
-    pub fn reduce_block<'b>(
+    pub async fn reduce_block<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
@@ -106,14 +72,33 @@ impl Reducer {
         output: &mut OutputPort<CRDTCommand>,
     ) -> Result<(), gasket::error::Error> {
         match self {
-            Reducer::UtxoOwners(x) => x.reduce_block(block, ctx, rollback, output),
-            Reducer::UtxoByAddress(x) => x.reduce_block(block, ctx, rollback, output),
-            Reducer::Parameters(x) => x.reduce_block(block, rollback, output),
-            Reducer::AssetMetadata(x) => x.reduce_block(block, rollback, output),
-            Reducer::PolicyAssetsMoved(x) => x.reduce_block(block, output),
-            Reducer::MultiAssetBalances(x) => x.reduce_block(block, ctx, rollback, output),
-            Reducer::AdaHandle(x) => x.reduce_block(block, ctx, rollback, output),
-            Reducer::StakeToPool(x) => x.reduce_block(block, rollback, output),
+            Reducer::UtxoOwners(x) => x.reduce_block(block, ctx, rollback, output).await,
+            Reducer::UtxoByAddress(x) => x.reduce_block(block, ctx, rollback, output).await,
+            Reducer::Parameters(x) => x.reduce_block(block, rollback, output).await,
+            Reducer::AssetMetadata(x) => x.reduce_block(block, rollback, output).await,
+            Reducer::PolicyAssetsMoved(x) => x.reduce_block(block, output).await,
+            Reducer::MultiAssetBalances(x) => x.reduce_block(block, ctx, rollback, output).await,
+            Reducer::AdaHandle(x) => x.reduce_block(block, ctx, rollback, output).await,
+            Reducer::StakeToPool(x) => x.reduce_block(block, rollback, output).await,
         }
+    }
+}
+
+pub struct Bootstrapper {
+    reducers: Vec<Reducer>,
+    stage: worker::Stage,
+}
+
+impl Bootstrapper {
+    pub fn borrow_input_port(&mut self) -> &'_ mut InputPort<EnrichedBlockPayload> {
+        &mut self.stage.input
+    }
+
+    pub fn borrow_output_port(&mut self) -> &'_ mut OutputPort<CRDTCommand> {
+        &mut self.stage.output
+    }
+
+    pub fn spawn_stage(self, pipeline: &bootstrap::Pipeline) -> Tether {
+        spawn_stage(self.stage, pipeline.policy.clone())
     }
 }

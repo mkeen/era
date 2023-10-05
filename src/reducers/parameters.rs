@@ -1,9 +1,9 @@
-use pallas::ledger::traverse::MultiEraBlock;
-use serde::Deserialize;
-
 use crate::crosscut::epochs::block_epoch;
 use crate::model::Value;
 use crate::{crosscut, model};
+use gasket::messaging::tokio::OutputPort;
+use pallas::ledger::traverse::MultiEraBlock;
+use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -16,11 +16,11 @@ pub struct Reducer {
 }
 
 impl Reducer {
-    pub fn reduce_block<'b>(
+    pub async fn reduce_block<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
         rollback: bool,
-        output: &mut super::OutputPort<()>,
+        output: &mut OutputPort<model::CRDTCommand>,
     ) -> Result<(), gasket::error::Error> {
         if rollback {
             return Ok(());
@@ -62,15 +62,15 @@ impl Reducer {
 
         let crdt = model::CRDTCommand::HashSetMulti(key, member_keys, member_values);
 
-        output.send(gasket::messaging::Message::from(crdt))
+        output.send(crdt.into()).await
     }
 }
 
 impl Config {
-    pub fn plugin(self, chain: &crosscut::ChainWellKnownInfo) -> super::Reducer {
+    pub fn plugin(self, chain: crosscut::ChainWellKnownInfo) -> super::Reducer {
         let reducer = Reducer {
             config: self,
-            chain: chain.clone(),
+            chain,
         };
 
         super::Reducer::Parameters(reducer)

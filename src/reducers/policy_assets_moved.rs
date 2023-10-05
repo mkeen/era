@@ -3,6 +3,8 @@ use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use std::str::FromStr;
 
+use gasket::messaging::tokio::OutputPort;
+
 use pallas::crypto::hash::Hash;
 use pallas::ledger::traverse::{MultiEraAsset, MultiEraBlock, MultiEraPolicyAssets};
 use serde::Deserialize;
@@ -42,12 +44,12 @@ impl Reducer {
         };
     }
 
-    fn process_asset(
+    async fn process_asset(
         &mut self,
         policy: &Hash<28>,
         fingerprint: &str,
         timestamp: &str,
-        output: &mut super::OutputPort<()>,
+        output: &mut super::OutputPort<model::CRDTCommand>,
     ) -> Result<(), gasket::error::Error> {
         if !self.is_policy_id_accepted(&policy) {
             return Ok(());
@@ -63,13 +65,15 @@ impl Reducer {
             fingerprint.to_string(),
             timestamp.to_string().into(),
         );
-        output.send(crdt.into())
+        output.send(crdt.into()).await;
+
+        Ok(())
     }
 
-    pub fn reduce_block<'b>(
+    pub async fn reduce_block<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
-        output: &mut super::OutputPort<()>,
+        output: &mut OutputPort<model::CRDTCommand>,
     ) -> Result<(), gasket::error::Error> {
         for tx in block.txs().into_iter() {
             for (_, out) in tx.produces().iter() {
@@ -87,7 +91,8 @@ impl Reducer {
                                     &fingerprint,
                                     &self.time.slot_to_wallclock(block.slot()).to_string(),
                                     output,
-                                )?;
+                                )
+                                .await;
                             }
                         }
                     }
@@ -102,8 +107,8 @@ impl Reducer {
 impl Config {
     pub fn plugin(
         self,
-        chain: &crosscut::ChainWellKnownInfo,
-        policy: &crosscut::policies::RuntimePolicy,
+        chain: crosscut::ChainWellKnownInfo,
+        policy: crosscut::policies::RuntimePolicy,
     ) -> super::Reducer {
         let policy_ids: Option<Vec<Hash<28>>> = match &self.policy_ids_hex {
             Some(pids) => {

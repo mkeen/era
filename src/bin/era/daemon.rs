@@ -99,37 +99,37 @@ fn shutdown(pipeline: bootstrap::Pipeline) {
     }
 }
 
-// fn gasket_policy(config: Option<&gasket::retries::Policy>) -> gasket::runtime::Policy {
-//     let default_policy = gasket::retries::Policy {
-//         max_retries: 20,
-//         backoff_unit: Duration::from_secs(1),
-//         backoff_factor: 2,
-//         max_backoff: Duration::from_secs(60),
-//         dismissible: false,
-//     };
-
-//     gasket::runtime::Policy {
-//         tick_timeout: None,
-//         bootstrap_retry: config.cloned().unwrap_or(default_policy.clone()),
-//         work_retry: config.cloned().unwrap_or(default_policy.clone()),
-//         teardown_retry: config.cloned().unwrap_or(default_policy.clone()),
-//     }
-// }
-
 pub fn run(args: &Args) -> Result<(), era::Error> {
     console::initialize(&args.console);
 
     let config = ConfigRoot::new(&args.config)
         .map_err(|err| era::Error::ConfigError(format!("{:?}", err)))?;
 
+    let block_config = config.blocks.unwrap_or_default();
+
     let chain = config.chain.unwrap_or_default().into();
 
-    let block_config = config.blocks.unwrap_or_default();
     let policy = config.policy.unwrap_or_default().into();
 
-    let storage = config.storage.plugin(&chain, &config.intersect, &policy); // Am I supposed to pass the cursor in or no?
+    let enrich = config
+        .enrich
+        .unwrap_or_default()
+        .bootstrapper(&policy.clone());
 
-    let cursor = storage.build_cursor();
+    let storage = config
+        .storage
+        .plugin(&chain, &config.intersect, &policy.clone());
+
+    let cursor = storage.into();
+
+    let ctx = bootstrap::Context {
+        chain,
+        policy,
+        cursor,
+        intersect: &config.intersect,
+        finalize: crosscut::FinalizeConfig,
+        blocks: Some(block_config.into()),
+    };
 
     let source = config.source.plugin(
         &chain,
@@ -137,26 +137,19 @@ pub fn run(args: &Args) -> Result<(), era::Error> {
         &config.intersect,
         &config.finalize,
         &policy,
-        &cursor,
+        &storage.cursor,
     );
 
-    let enrich = config
-        .enrich
-        .unwrap_or_default()
-        .bootstrapper(&policy, &block_config);
+    let reducer = reducers::worker::bootstrap(policy, chain, config.reducers);
 
-    let reducer = reducers::Bootstrapper::new(config.reducers, &chain, &policy);
+    let pipeline = bootstrap::Pipeline::bootstrap(source, enrich, reducer, storage);
 
-    let pipeline = bootstrap::build(source, enrich, reducer, storage, cursor)?;
-
-    while !should_stop(&pipeline) {
+    while true {
         console::refresh(&args.console, &pipeline);
         std::thread::sleep(Duration::from_millis(250));
     }
 
     shutdown(pipeline);
-    blocks.close();
-    // todo make sure sled databases get flushed in their cleanup
 
     Ok(())
 }

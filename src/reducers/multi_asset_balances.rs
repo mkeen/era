@@ -1,10 +1,12 @@
+use crate::bootstrap::Context;
+use crate::model::CRDTCommand;
+use crate::{crosscut, model, prelude::*};
+use gasket::messaging::tokio::OutputPort;
 use pallas::ledger::traverse::MultiEraBlock;
 use pallas::ledger::traverse::{
     MultiEraAsset, MultiEraInput, MultiEraOutput, MultiEraPolicyAssets,
 };
 use serde::{Deserialize, Serialize};
-
-use crate::{crosscut, model, prelude::*};
 
 use bech32::{ToBase32, Variant};
 use blake2::digest::{Update, VariableOutput};
@@ -128,12 +130,12 @@ impl Reducer {
         (fingerprint_tallies, policy_asset_owners)
     }
 
-    fn process_asset_movement(
+    async fn process_asset_movement<'a>(
         &self,
-        output: &mut super::OutputPort<()>,
+        output: &mut super::OutputPort<model::CRDTCommand>,
         soa: &String,
         lovelace: u64,
-        assets: &Vec<MultiEraPolicyAssets>,
+        assets: &'a Vec<MultiEraPolicyAssets<'a>>,
         spending: bool,
         slot: u64,
     ) -> Result<(), gasket::error::Error> {
@@ -151,49 +153,60 @@ impl Reducer {
             for (soa, quantity_map) in fingerprint_tallies.clone() {
                 for (fingerprint, quantity) in quantity_map {
                     if !fingerprint.is_empty() {
-                        let _ = output.send(gasket::messaging::Message::from(
-                            model::CRDTCommand::HashCounter(
-                                format!("{}.{}", prefix, soa),
-                                fingerprint.to_owned(),
-                                quantity,
-                            ),
-                        ));
+                        output
+                            .send(
+                                model::CRDTCommand::HashCounter(
+                                    format!("{}.{}", prefix, soa),
+                                    fingerprint.to_owned(),
+                                    quantity,
+                                )
+                                .into(),
+                            )
+                            .await;
                     }
                 }
 
-                let _ = output.send(gasket::messaging::Message::from(
-                    model::CRDTCommand::AnyWriteWins(
-                        format!("{}.l.{}", prefix, soa),
-                        self.time.slot_to_wallclock(slot).to_string().into(),
-                    ),
-                ));
+                output
+                    .send(
+                        model::CRDTCommand::AnyWriteWins(
+                            format!("{}.l.{}", prefix, soa),
+                            self.time.slot_to_wallclock(slot).to_string().into(),
+                        )
+                        .into(),
+                    )
+                    .await;
             }
         }
 
         if !policy_asset_owners.is_empty() {
             for (policy_id, asset_to_owner) in policy_asset_owners {
                 if spending {
-                    // i am editing here
-
-                    output.send(gasket::messaging::Message::from(
-                        model::CRDTCommand::AnyWriteWins(
-                            format!("{}.lp.{}", prefix, policy_id),
-                            self.time.slot_to_wallclock(slot).to_string().into(),
-                        ),
-                    ))?;
+                    // may have lost some stuff in this reducer around this area
+                    output
+                        .send(
+                            model::CRDTCommand::AnyWriteWins(
+                                format!("{}.lp.{}", prefix, policy_id),
+                                self.time.slot_to_wallclock(slot).to_string().into(),
+                            )
+                            .into(),
+                        )
+                        .await;
                 }
 
                 for (fingerprint, soas) in asset_to_owner {
                     for (soa, quantity) in soas {
                         if !soa.is_empty() {
                             if quantity != 0 {
-                                output.send(gasket::messaging::Message::from(
-                                    model::CRDTCommand::HashCounter(
-                                        format!("{}.owned.{}", prefix, fingerprint),
-                                        soa.clone(),
-                                        quantity,
-                                    ),
-                                ))?;
+                                output
+                                    .send(
+                                        model::CRDTCommand::HashCounter(
+                                            format!("{}.owned.{}", prefix, fingerprint),
+                                            soa.clone(),
+                                            quantity,
+                                        )
+                                        .into(),
+                                    )
+                                    .await;
                             }
                         }
                     }
@@ -204,10 +217,10 @@ impl Reducer {
         Ok(())
     }
 
-    fn process_received(
+    async fn process_received<'a>(
         &self,
-        output: &mut super::OutputPort<()>,
-        meo: &MultiEraOutput,
+        output: &mut OutputPort<CRDTCommand>,
+        meo: &'a MultiEraOutput<'a>,
         slot: u64,
         rollback: bool,
     ) -> Result<(), gasket::error::Error> {
@@ -221,12 +234,15 @@ impl Reducer {
             rollback,
             slot,
         )
+        .await;
+
+        Ok(())
     }
 
-    fn process_spent(
+    async fn process_spent<'a>(
         &self,
-        output: &mut super::OutputPort<()>,
-        mei: &MultiEraInput,
+        output: &mut OutputPort<model::CRDTCommand>,
+        mei: &'a MultiEraInput<'a>,
         ctx: &model::BlockContext,
         slot: u64,
         rollback: bool,
@@ -235,35 +251,37 @@ impl Reducer {
             let spent_from_soa =
                 self.stake_or_address_from_address(&spent_output.address().unwrap());
 
-            return self.process_asset_movement(
-                output,
-                &spent_from_soa,
-                spent_output.lovelace_amount(),
-                &spent_output.non_ada_assets(),
-                !rollback,
-                slot,
-            );
+            return self
+                .process_asset_movement(
+                    output,
+                    &spent_from_soa,
+                    spent_output.lovelace_amount(),
+                    &spent_output.non_ada_assets(),
+                    !rollback,
+                    slot,
+                )
+                .await;
         }
 
         Ok(())
     }
 
-    pub fn reduce_block<'b>(
+    pub async fn reduce_block<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &mut super::OutputPort<()>,
+        output: &mut OutputPort<model::CRDTCommand>,
     ) -> Result<(), gasket::error::Error> {
         let slot = block.slot();
 
         for tx in block.txs() {
             for consumes in tx.consumes().iter() {
-                let _ = self.process_spent(output, consumes, ctx, slot, rollback);
+                self.process_spent(output, consumes, ctx, slot, rollback);
             }
 
             for (_, utxo_produced) in tx.produces().iter() {
-                let _ = self.process_received(output, utxo_produced, slot, rollback);
+                self.process_received(output, utxo_produced, slot, rollback);
             }
         }
 
@@ -272,16 +290,12 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(
-        self,
-        chain: &crosscut::ChainWellKnownInfo,
-        policy: &crosscut::policies::RuntimePolicy,
-    ) -> super::Reducer {
+    pub fn plugin(self, ctx: &Context) -> super::Reducer {
         let reducer = Reducer {
             config: self,
-            chain: chain.clone(),
-            policy: policy.clone(),
-            time: crosscut::time::NaiveProvider::new(chain.clone()),
+            chain: ctx.chain.clone(),
+            policy: ctx.policy.clone(),
+            time: crosscut::time::NaiveProvider::new(ctx.chain.clone()),
         };
 
         super::Reducer::MultiAssetBalances(reducer)

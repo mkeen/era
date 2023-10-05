@@ -56,7 +56,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                 stage
                     .output
                     .send(EnrichedBlockPayload::roll_forward(
-                        *cbor,
+                        cbor.clone(),
                         BlockContext::default(),
                     ))
                     .await;
@@ -69,9 +69,9 @@ impl gasket::framework::Worker<Stage> for Worker {
                 stage
                     .output
                     .send(EnrichedBlockPayload::roll_back(
-                        *cbor,
+                        cbor.clone(),
                         BlockContext::default(),
-                        *last_good_block_info_rollback,
+                        last_good_block_info_rollback.clone(),
                         *last_rollback_for_batch,
                     ))
                     .await;
