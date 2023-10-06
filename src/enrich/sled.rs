@@ -287,6 +287,7 @@ impl gasket::framework::Worker<Stage> for Worker {
         stage: &mut Stage,
     ) -> Result<WorkSchedule<RawBlockPayload>, WorkerError> {
         let msg = stage.input.recv().await.or_panic()?;
+        log::warn!("hi");
         Ok(WorkSchedule::Unit(msg.payload))
     }
 

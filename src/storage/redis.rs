@@ -89,12 +89,14 @@ pub struct Worker {
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Worker {
     async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
+        log::debug!("starting redis");
         let connection = redis::Client::open(stage.config.connection_params.clone())
             .and_then(|c| c.get_connection())
             .or_retry()
             .unwrap()
             .into();
 
+        log::debug!("redis connection opened");
         Ok(Self { connection })
     }
 

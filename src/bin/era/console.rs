@@ -176,7 +176,7 @@ impl PlainConsole {
                 gasket::runtime::TetherState::Blocked(_) => {
                     log::warn!(
                         "[{}] stage tehter is blocked or not reporting state",
-                        tether.name()
+                        tether.name(),
                     );
                 }
                 gasket::runtime::TetherState::Alive(state) => {

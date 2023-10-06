@@ -13,7 +13,7 @@ pub struct Transport {
 
 impl Transport {
     pub async fn setup(address: &str, magic: u64) -> Result<Self, crate::Error> {
-        log::debug!("connecting muxer");
+        log::debug!("connecting muxer {}", magic);
 
         let bearer = multiplexer::Bearer::connect_tcp(address).await.unwrap();
 
@@ -26,7 +26,11 @@ impl Transport {
         let versions = handshake::n2n::VersionTable::v6_and_above(magic);
         let mut client = handshake::Client::new(handshake_channel);
 
+        log::debug!("got to this {}", versions.values.keys().len());
+
         let output = client.handshake(versions).await.unwrap();
+
+        log::debug!("handshake done");
 
         log::info!("handshake output: {:?}", output);
 

@@ -1,10 +1,13 @@
 use config::builder::DefaultState;
+use log::*;
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraHeader};
+use pallas::network::facades::PeerClient;
 use pallas::network::miniprotocols::chainsync::{HeaderContent, NextResponse};
 use pallas::network::miniprotocols::{blockfetch, chainsync, Point};
 
 use gasket::framework::*;
 
+use crate::crosscut::IntersectConfig;
 use crate::model::RawBlockPayload;
 use crate::sources::n2n::transport::Transport;
 use crate::{crosscut, model, sources, sources::utils, storage, Error};
@@ -22,19 +25,47 @@ fn to_traverse<'b>(header: &'b HeaderContent) -> Result<MultiEraHeader<'b>, Erro
 
 pub type OutputPort = gasket::messaging::tokio::OutputPort<RawBlockPayload>;
 
+async fn intersect_from_config(
+    peer: &mut PeerClient,
+    intersect: &IntersectConfig,
+) -> Result<(), WorkerError> {
+    let chainsync = peer.chainsync();
+
+    let intersect = match intersect {
+        IntersectConfig::Origin => {
+            info!("intersecting origin");
+            chainsync.intersect_origin().await.or_restart().unwrap();
+        }
+        IntersectConfig::Tip => {
+            info!("intersecting tip");
+            chainsync.intersect_tip().await.or_restart().unwrap();
+        }
+        IntersectConfig::Point(..) => {
+            info!("intersecting specific points");
+            let points = intersect.get_fallbacks().unwrap_or_default();
+            let (point, _) = chainsync.find_intersect(points).await.or_restart().unwrap();
+        }
+        IntersectConfig::Fallbacks(_) => {
+            let points = intersect.get_fallbacks().expect("fallback values");
+            let (point, _) = chainsync
+                .find_intersect(points)
+                .await
+                .map_err(crate::Error::ouroboros)
+                .unwrap();
+        }
+    };
+
+    Ok(())
+}
+
 pub struct Worker {
-    address: String,
     min_depth: usize,
-    chainsync: Option<chainsync::N2NClient>,
-    blockfetch: Option<blockfetch::Client>,
+    peer: PeerClient,
     chain_buffer: chainsync::RollbackBuffer,
 }
 
 impl Worker {
-    fn on_roll_forward(
-        &mut self,
-        content: chainsync::HeaderContent,
-    ) -> Result<(), gasket::error::Error> {
+    fn on_roll_forward(&mut self, content: &HeaderContent) -> Result<(), gasket::error::Error> {
         // parse the header and extract the point of the chain
 
         let header = to_traverse(&content).unwrap();
@@ -66,73 +97,77 @@ impl Worker {
         }
     }
 
-    async fn request_next(
-        &mut self,
-        chain_tip: &gasket::metrics::Gauge,
-    ) -> Result<(), gasket::error::Error> {
-        log::info!("requesting next block");
+    // async fn request_next(
+    //     &mut self,
+    //     chain_tip: &gasket::metrics::Gauge,
+    // ) -> Result<(), gasket::error::Error> {
+    //     log::info!("requesting next block");
 
-        let next = self
-            .chainsync
-            .as_mut()
-            .unwrap()
-            .request_next()
-            .await
-            .or_restart()
-            .unwrap();
+    //     let next = self
+    //         .chainsync
+    //         .as_mut()
+    //         .unwrap()
+    //         .request_next()
+    //         .await
+    //         .or_restart()
+    //         .unwrap();
 
-        match next {
-            chainsync::NextResponse::RollForward(h, t) => {
-                self.on_roll_forward(h)?;
-                chain_tip.set(t.1 as i64);
-                Ok(())
-            }
-            chainsync::NextResponse::RollBackward(p, t) => {
-                self.chain_buffer.roll_back(&p); // just rollback the chain buffer... dont do anything with rollback data on initial sync
-                chain_tip.set(t.1 as i64);
-                Ok(())
-            }
-            chainsync::NextResponse::Await => {
-                log::info!("chain-sync reached the tip of the chain");
-                Ok(())
-            }
-        }
-    }
+    //     match next {
+    //         chainsync::NextResponse::RollForward(h, t) => {
+    //             self.on_roll_forward(h)?;
+    //             chain_tip.set(t.1 as i64);
+    //             Ok(())
+    //         }
+    //         chainsync::NextResponse::RollBackward(p, t) => {
+    //             self.chain_buffer.roll_back(&p); // just rollback the chain buffer... dont do anything with rollback data on initial sync
+    //             chain_tip.set(t.1 as i64);
+    //             Ok(())
+    //         }
+    //         chainsync::NextResponse::Await => {
+    //             log::info!("chain-sync reached the tip of the chain");
+    //             Ok(())
+    //         }
+    //     }
+    // }
 
-    async fn await_next(
-        &mut self,
-        chain_tip: &gasket::metrics::Gauge,
-        blocks: &mut crosscut::historic::BufferBlocks,
-    ) -> Result<(), gasket::error::Error> {
-        log::info!("awaiting next block (blocking)");
+    // async fn await_next(
+    //     &mut self,
+    //     chain_tip: &gasket::metrics::Gauge,
+    //     blocks: &mut crosscut::historic::BufferBlocks,
+    // ) -> Result<(), gasket::error::Error> {
+    //     log::info!("awaiting next block (blocking)");
 
-        let next = self
-            .chainsync
-            .as_mut()
-            .unwrap()
-            .recv_while_must_reply()
-            .await
-            .or_restart()
-            .unwrap();
+    //     let next = self
+    //         .chainsync
+    //         .as_mut()
+    //         .unwrap()
+    //         .recv_while_must_reply()
+    //         .await
+    //         .or_restart()
+    //         .unwrap();
 
-        match next {
-            chainsync::NextResponse::RollForward(h, t) => {
-                self.on_roll_forward(h)?;
-                chain_tip.set(t.1 as i64);
-                Ok(())
-            }
-            chainsync::NextResponse::RollBackward(p, t) => {
-                self.on_rollback(&p, blocks)?;
-                chain_tip.set(t.1 as i64);
-                Ok(())
-            }
-            _ => unreachable!("protocol invariant not respected in chain-sync state machine"),
-        }
-    }
+    //     match next {
+    //         chainsync::NextResponse::RollForward(h, t) => {
+    //             self.on_roll_forward(h)?;
+    //             chain_tip.set(t.1 as i64);
+    //             Ok(())
+    //         }
+    //         chainsync::NextResponse::RollBackward(p, t) => {
+    //             self.on_rollback(&p, blocks)?;
+    //             chain_tip.set(t.1 as i64);
+    //             Ok(())
+    //         }
+    //         _ => unreachable!("protocol invariant not respected in chain-sync state machine"),
+    //     }
+    // }
 }
 
 #[derive(Stage)]
-#[stage(name = "n2n-chainsync", unit = "()", worker = "Worker")]
+#[stage(
+    name = "n2n-chainsync",
+    unit = "NextResponse<HeaderContent>",
+    worker = "Worker"
+)]
 pub struct Stage {
     pub config: sources::n2n::Config,
     pub cursor: storage::Cursor,
@@ -153,59 +188,54 @@ pub struct Stage {
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Worker {
     async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
-        let transport = Transport::setup(&stage.config.address, stage.chain.magic)
+        log::warn!(
+            "going to try and bootstrap chainsync {}",
+            stage.config.address
+        );
+
+        let mut peer_session = PeerClient::connect(&stage.config.address, stage.chain.magic)
             .await
             .unwrap();
 
-        let mut chainsync = chainsync::N2NClient::new(transport.channel2);
+        intersect_from_config(&mut peer_session, &stage.intersect)
+            .await
+            .unwrap();
 
-        let start = utils::define_chainsync_start(
-            &stage.intersect,
-            &mut stage.cursor.clone(),
-            &mut chainsync,
-        )
-        .await
-        .or_retry()?;
+        log::warn!("started up chainsync");
 
-        let start = start.ok_or(Error::IntersectNotFound).or_panic()?;
-
-        log::info!("chain-sync intersection is {:?}", start);
-
-        let blockfetch = blockfetch::Client::new(transport.channel3);
+        log::warn!("hey");
 
         Ok(Self {
-            address: stage.config.address.clone(),
             min_depth: stage.config.min_depth.unwrap_or(10 as usize),
-            blockfetch: Some(blockfetch),
-            chainsync: Some(chainsync),
+            peer: peer_session,
             chain_buffer: chainsync::RollbackBuffer::new(),
         })
     }
 
-    async fn schedule(&mut self, stage: &mut Stage) -> Result<WorkSchedule<()>, WorkerError> {
-        let client = &mut self.chainsync.as_mut().unwrap();
+    async fn schedule(
+        &mut self,
+        _: &mut Stage,
+    ) -> Result<WorkSchedule<NextResponse<HeaderContent>>, WorkerError> {
+        log::warn!("jhhuuioh");
+        let client = self.peer.chainsync();
 
         Ok(WorkSchedule::Unit(match client.has_agency() {
             true => {
                 log::info!("requesting next block");
-                self.request_next(&stage.chain_tip)
-                    .await
-                    .or_restart()
-                    .unwrap();
-                ()
+                client.request_next().await.or_restart().unwrap()
             }
             false => {
                 log::info!("awaiting next block (blocking)");
-                self.await_next(&stage.chain_tip, &mut stage.blocks)
-                    .await
-                    .or_restart()
-                    .unwrap();
-                ()
+                client.recv_while_must_reply().await.or_restart().unwrap()
             }
         }))
     }
 
-    async fn execute(&mut self, _: &(), stage: &mut Stage) -> Result<(), WorkerError> {
+    async fn execute(
+        &mut self,
+        unit: &NextResponse<HeaderContent>,
+        stage: &mut Stage,
+    ) -> Result<(), WorkerError> {
         let mut rolled_back = false;
 
         let blocks = &mut stage.blocks;
@@ -245,8 +275,18 @@ impl gasket::framework::Worker<Stage> for Worker {
             }
         }
 
-        if rolled_back {
-            return Ok(());
+        match unit {
+            NextResponse::RollForward(h, t) => {
+                self.on_roll_forward(h).unwrap();
+                stage.chain_tip.set(t.1 as i64);
+            }
+            NextResponse::RollBackward(p, t) => {
+                self.chain_buffer.roll_back(&p);
+                stage.chain_tip.set(t.1 as i64);
+            }
+            NextResponse::Await => {
+                log::info!("chain-sync reached the tip of the chain");
+            }
         }
 
         // see if we have points that already reached certain depth
@@ -254,9 +294,8 @@ impl gasket::framework::Worker<Stage> for Worker {
 
         for point in ready {
             let block = self
-                .blockfetch
-                .as_mut()
-                .unwrap()
+                .peer
+                .blockfetch()
                 .fetch_single(point.clone())
                 .await
                 .or_restart()?;

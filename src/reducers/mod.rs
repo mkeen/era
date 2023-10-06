@@ -61,8 +61,6 @@ pub enum Reducer {
     StakeToPool(stake_to_pool::Reducer),
 }
 
-struct Stub {}
-
 impl Reducer {
     pub async fn reduce_block<'b>(
         &mut self,
@@ -81,24 +79,5 @@ impl Reducer {
             Reducer::AdaHandle(x) => x.reduce_block(block, ctx, rollback, output).await,
             Reducer::StakeToPool(x) => x.reduce_block(block, rollback, output).await,
         }
-    }
-}
-
-pub struct Bootstrapper {
-    reducers: Vec<Reducer>,
-    stage: worker::Stage,
-}
-
-impl Bootstrapper {
-    pub fn borrow_input_port(&mut self) -> &'_ mut InputPort<EnrichedBlockPayload> {
-        &mut self.stage.input
-    }
-
-    pub fn borrow_output_port(&mut self) -> &'_ mut OutputPort<CRDTCommand> {
-        &mut self.stage.output
-    }
-
-    pub fn spawn_stage(self, pipeline: &bootstrap::Pipeline) -> Tether {
-        spawn_stage(self.stage, pipeline.policy.clone())
     }
 }

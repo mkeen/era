@@ -15,10 +15,10 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub fn bootstrap(
-        mut source: Option<sources::Bootstrapper>,
-        mut enrich: Option<enrich::Bootstrapper>,
-        mut reducer: reducers::worker::Stage,
-        mut storage: Option<storage::Bootstrapper>,
+        source: Option<sources::Bootstrapper>,
+        enrich: Option<enrich::Bootstrapper>,
+        reducer: reducers::worker::Stage,
+        storage: Option<storage::Bootstrapper>,
     ) -> Self {
         let source = source.unwrap();
         let enrich = enrich.unwrap();
@@ -27,10 +27,10 @@ impl Pipeline {
         let mut pipe = Self {
             tethers: Vec::new(),
             policy: Policy {
-                tick_timeout: Some(Duration::from_secs(30)),
-                bootstrap_retry: retries::Policy::no_retry(),
-                work_retry: retries::Policy::no_retry(),
-                teardown_retry: retries::Policy::no_retry(),
+                tick_timeout: Some(Duration::from_secs(10)),
+                bootstrap_retry: retries::Policy::default(),
+                work_retry: retries::Policy::default(),
+                teardown_retry: retries::Policy::default(),
             },
         };
 
@@ -58,9 +58,9 @@ impl Pipeline {
         connect_ports(&mut reducer.output, storage.borrow_input_port(), 100);
 
         self.register_stage(storage.spawn_stage(self));
-        self.register_stage(source.spawn_stage(self));
-        self.register_stage(enrich.spawn_stage(self));
         self.register_stage(spawn_stage(reducer, self.policy.clone()));
+        self.register_stage(enrich.spawn_stage(self));
+        self.register_stage(source.spawn_stage(self));
     }
 }
 
