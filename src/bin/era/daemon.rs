@@ -1,6 +1,5 @@
 use clap;
 use era::{bootstrap, crosscut, enrich, reducers, sources, storage};
-use gasket::runtime::spawn_stage;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -43,7 +42,6 @@ struct ConfigRoot {
     intersect: crosscut::IntersectConfig,
     finalize: Option<crosscut::FinalizeConfig>,
     chain: Option<ChainConfig>,
-    policy: Option<crosscut::policies::RuntimePolicy>,
     blocks: Option<crosscut::historic::BlockConfig>,
 }
 
@@ -74,7 +72,7 @@ fn should_stop(pipeline: &bootstrap::Pipeline) -> bool {
         .tethers
         .iter()
         .any(|tether| match tether.check_state() {
-            gasket::runtime::TetherState::Alive(x) => false,
+            gasket::runtime::TetherState::Alive(_) => false,
             _ => true,
         })
 }
@@ -106,15 +104,10 @@ pub fn run(args: &Args) -> Result<(), era::Error> {
 
     let chain = config.chain.unwrap_or_default().into();
 
-    let policy: crosscut::policies::RuntimePolicy = config.policy.unwrap_or_default().into();
-
-    let (cursor, storage) = config
-        .storage
-        .bootstrapper(&chain, &config.intersect, &policy.clone());
+    let (cursor, storage) = config.storage.bootstrapper(&chain, &config.intersect);
 
     let ctx = bootstrap::Context {
         chain,
-        policy,
         intersect: config.intersect,
         finalize: config.finalize,
         blocks: block_config.into(),

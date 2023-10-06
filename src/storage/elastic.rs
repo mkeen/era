@@ -13,7 +13,6 @@ use serde_json::{json, Value as JsonValue};
 use crate::{
     bootstrap, crosscut,
     model::{self, CRDTCommand},
-    prelude::AppliesPolicy,
     Error,
 };
 
@@ -35,7 +34,6 @@ pub struct Config {
     pub worker_threads: Option<usize>,
     pub username: Option<String>,
     pub password: Option<String>,
-    pub policy: crosscut::policies::RuntimePolicy,
 }
 
 impl Config {
@@ -43,7 +41,6 @@ impl Config {
         self,
         chain: &crosscut::ChainWellKnownInfo,
         intersect: &crosscut::IntersectConfig,
-        policy: &crosscut::policies::RuntimePolicy,
     ) -> Stage {
         Stage {
             config: self.clone(),
@@ -118,11 +115,7 @@ async fn apply_command(cmd: CRDTCommand, client: &Elasticsearch) -> Option<ESRes
     }
 }
 
-async fn apply_batch(
-    batch: Batch,
-    client: &Elasticsearch,
-    policy: &crosscut::policies::RuntimePolicy,
-) -> Result<(), gasket::error::Error> {
+async fn apply_batch(batch: Batch, client: &Elasticsearch) -> Result<(), gasket::error::Error> {
     let mut stream = futures::stream::iter(batch.items)
         .map(|cmd| apply_command(cmd, client))
         .buffer_unordered(10);
@@ -135,8 +128,6 @@ async fn apply_batch(
             result
                 .map(|x| x.error_for_status_code())
                 .map_err(|e| Error::StorageError(e.to_string()))
-                .apply_policy(policy)
-                .or_panic()
                 .unwrap();
         }
     }
@@ -148,8 +139,6 @@ async fn apply_batch(
             result
                 .and_then(|x| x.error_for_status_code())
                 .map_err(|e| Error::StorageError(e.to_string()))
-                .apply_policy(policy)
-                .or_panic()
                 .unwrap();
         }
     }
@@ -193,9 +182,7 @@ impl gasket::framework::Worker<Stage> for Worker {
         let count = batch.items.len();
         let client = self.client.as_ref().unwrap();
 
-        apply_batch(batch, client, &stage.config.policy)
-            .await
-            .unwrap();
+        apply_batch(batch, client).await.unwrap();
         stage.ops_count.inc(count as u64);
         Ok(())
     }

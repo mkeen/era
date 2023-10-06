@@ -57,7 +57,6 @@ fn asset_fingerprint(data_list: [&str; 2]) -> Result<String, bech32::Error> {
 pub struct Reducer {
     config: Config,
     chain: crosscut::ChainWellKnownInfo,
-    policy: RuntimePolicy,
     time: crosscut::time::NaiveProvider,
 }
 
@@ -294,7 +293,6 @@ impl Config {
         let reducer = Reducer {
             config: self,
             chain: ctx.chain.clone(),
-            policy: ctx.policy.clone(),
             time: crosscut::time::NaiveProvider::new(ctx.chain.clone()),
         };
 

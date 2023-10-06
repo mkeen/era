@@ -38,11 +38,11 @@ pub enum Config {
 impl Config {
     fn bootstrapper(self, ctx: &Context) -> Reducer {
         match self {
-            Config::UtxoOwners(c) => c.plugin(ctx.policy.clone()),
-            Config::UtxoByAddress(c) => c.plugin(ctx.policy.clone()),
+            Config::UtxoOwners(c) => c.plugin(),
+            Config::UtxoByAddress(c) => c.plugin(),
             Config::Parameters(c) => c.plugin(ctx.chain.clone()),
-            Config::AssetMetadata(c) => c.plugin(ctx.chain.clone(), ctx.policy.clone()),
-            Config::PolicyAssetsMoved(c) => c.plugin(ctx.chain.clone(), ctx.policy.clone()),
+            Config::AssetMetadata(c) => c.plugin(ctx.chain.clone()),
+            Config::PolicyAssetsMoved(c) => c.plugin(ctx.chain.clone()),
             Config::MultiAssetBalances(c) => c.plugin(ctx),
             Config::AdaHandle(c) => c.plugin(ctx.chain.clone()),
             Config::StakeToPool(c) => c.plugin(),

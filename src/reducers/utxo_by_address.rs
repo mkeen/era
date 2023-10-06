@@ -21,7 +21,6 @@ pub struct Config {
 
 pub struct Reducer {
     config: Config,
-    policy: crosscut::policies::RuntimePolicy,
 }
 
 // hash and index are stored in the key
@@ -163,12 +162,7 @@ impl Reducer {
         output: &mut OutputPort<CRDTCommand>,
         rollback: bool,
     ) -> Result<(), gasket::error::Error> {
-        let utxo = ctx.find_utxo(input).apply_policy(&self.policy).unwrap();
-
-        let utxo = match utxo {
-            Some(x) => x,
-            None => return Ok(()),
-        };
+        let utxo = ctx.find_utxo(input).unwrap();
 
         let address = utxo.address().map(|x| x.to_string()).unwrap();
 
@@ -318,11 +312,8 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(self, policy: crosscut::policies::RuntimePolicy) -> super::Reducer {
-        let reducer = Reducer {
-            config: self,
-            policy,
-        };
+    pub fn plugin(self) -> super::Reducer {
+        let reducer = Reducer { config: self };
 
         super::Reducer::UtxoByAddress(reducer)
     }

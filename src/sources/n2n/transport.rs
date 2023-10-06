@@ -12,13 +12,10 @@ pub struct Transport {
 }
 
 impl Transport {
-    pub fn setup(address: &str, magic: u64) -> Result<Self, crate::Error> {
+    pub async fn setup(address: &str, magic: u64) -> Result<Self, crate::Error> {
         log::debug!("connecting muxer");
-        let runtime = tokio::runtime::Runtime::new().unwrap();
 
-        let bearer = runtime
-            .block_on(multiplexer::Bearer::connect_tcp(address))
-            .unwrap();
+        let bearer = multiplexer::Bearer::connect_tcp(address).await.unwrap();
 
         let mut plexer = multiplexer::Plexer::new(bearer);
 
@@ -29,9 +26,7 @@ impl Transport {
         let versions = handshake::n2n::VersionTable::v6_and_above(magic);
         let mut client = handshake::Client::new(handshake_channel);
 
-        let output = runtime
-            .block_on(client.handshake(versions))
-            .map_err(crate::Error::ouroboros)?;
+        let output = client.handshake(versions).await.unwrap();
 
         log::info!("handshake output: {:?}", output);
 

@@ -3,7 +3,7 @@ use pallas::{ledger::traverse::MultiEraBlock, network::miniprotocols::Point};
 
 use crate::bootstrap::Context;
 use crate::model::{CRDTCommand, EnrichedBlockPayload};
-use crate::{crosscut, model, prelude::*, reducers, storage};
+use crate::{crosscut, model, prelude::*, reducers};
 
 use super::Reducer;
 
@@ -11,7 +11,6 @@ use gasket::framework::*;
 use gasket::messaging::tokio::{InputPort, OutputPort};
 
 struct Config {
-    policy: crosscut::policies::RuntimePolicy,
     chain: crosscut::ChainWellKnownInfo,
 }
 
@@ -20,7 +19,6 @@ pub struct Worker {}
 impl Worker {
     async fn reduce_block<'b>(
         &mut self,
-        policy: crosscut::policies::RuntimePolicy,
         block: &'b Vec<u8>,
         rollback: bool,
         ctx: &model::BlockContext,
@@ -29,50 +27,41 @@ impl Worker {
         output: &mut OutputPort<CRDTCommand>,
         reducers: &mut Vec<Reducer>,
     ) -> Option<i64> {
-        let block = MultiEraBlock::decode(block)
-            .map_err(crate::Error::cbor)
-            .apply_policy(&policy.clone())
-            .or_panic()
-            .unwrap();
+        let block = MultiEraBlock::decode(block).unwrap();
 
-        if let Some(block) = block {
-            let (point, block_number) = match rollback {
-                true => last_good_block_rollback_info,
-                false => (
-                    Point::Specific(block.slot(), block.hash().to_vec()),
-                    block.number() as i64,
-                ),
-            };
+        let (point, block_number) = match rollback {
+            true => last_good_block_rollback_info,
+            false => (
+                Point::Specific(block.slot(), block.hash().to_vec()),
+                block.number() as i64,
+            ),
+        };
 
-            output
-                .send(model::CRDTCommand::block_starting(&block).into())
-                .await;
+        output
+            .send(model::CRDTCommand::block_starting(&block).into())
+            .await;
 
-            for reducer in reducers {
-                reducer.reduce_block(&block, ctx, rollback, output).await;
-            }
-
-            output
-                .send(
-                    model::CRDTCommand::block_finished(
-                        point,
-                        !rollback || final_block_in_rollback_batch,
-                    )
-                    .into(),
-                )
-                .await;
-
-            Some(block_number)
-        } else {
-            None
+        for reducer in reducers {
+            reducer.reduce_block(&block, ctx, rollback, output).await;
         }
+
+        output
+            .send(
+                model::CRDTCommand::block_finished(
+                    point,
+                    !rollback || final_block_in_rollback_batch,
+                )
+                .into(),
+            )
+            .await;
+
+        Some(block_number)
     }
 }
 
 pub fn bootstrap(ctx: &Context, reducers: Vec<reducers::Config>) -> Stage {
     Stage {
         config: Config {
-            policy: ctx.policy.clone(),
             chain: ctx.chain.clone(),
         },
         reducers: reducers.into_iter().map(|x| x.bootstrapper(&ctx)).collect(),
@@ -114,8 +103,10 @@ impl gasket::framework::Worker<Stage> for Worker {
         &mut self,
         stage: &mut Stage,
     ) -> Result<WorkSchedule<EnrichedBlockPayload>, WorkerError> {
-        let msg = stage.input.recv().await.unwrap();
-        Ok(WorkSchedule::Unit(msg.payload))
+        match stage.input.recv().await {
+            Ok(c) => Ok(WorkSchedule::Unit(c.payload)),
+            Err(_) => Err(WorkerError::Retry),
+        }
     }
 
     async fn execute(
@@ -126,7 +117,6 @@ impl gasket::framework::Worker<Stage> for Worker {
         match unit {
             model::EnrichedBlockPayload::RollForward(block, ctx) => {
                 self.reduce_block(
-                    stage.config.policy.clone(),
                     &block,
                     false,
                     &ctx,
@@ -144,7 +134,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                 final_block_in_batch,
             ) => {
                 self.reduce_block(
-                    stage.config.policy.clone(),
                     &block,
                     true,
                     &ctx,

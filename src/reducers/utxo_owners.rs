@@ -19,7 +19,6 @@ pub struct Config {
 
 pub struct Reducer {
     config: Config,
-    policy: crosscut::policies::RuntimePolicy,
 }
 
 // pub fn resolve_datum(utxo: &MultiEraOutput, tx: &MultiEraTx) -> Result<PlutusData, ()> {
@@ -110,7 +109,7 @@ impl Reducer {
         let prefix = self.config.prefix.as_deref();
         for tx in block.txs().into_iter() {
             for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
-                if let Some(Some(utxo)) = ctx.find_utxo(&consumed).apply_policy(&self.policy).ok() {
+                if let Ok(utxo) = ctx.find_utxo(&consumed) {
                     if let Some((key, value)) =
                         self.get_key_value(&utxo, &tx, &(consumed.hash().clone(), consumed.index()))
                     {
@@ -140,11 +139,8 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(self, policy: crosscut::policies::RuntimePolicy) -> super::Reducer {
-        let reducer = Reducer {
-            config: self,
-            policy,
-        };
+    pub fn plugin(self) -> super::Reducer {
+        let reducer = Reducer { config: self };
 
         super::Reducer::UtxoOwners(reducer)
     }

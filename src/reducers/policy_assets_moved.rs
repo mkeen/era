@@ -31,7 +31,6 @@ fn asset_fingerprint(data_list: [&str; 2]) -> Result<String, bech32::Error> {
 pub struct Reducer {
     config: Config,
     chain: crosscut::ChainWellKnownInfo,
-    policy: crosscut::policies::RuntimePolicy,
     policy_ids: Option<Vec<Hash<28>>>,
     time: crosscut::time::NaiveProvider,
 }
@@ -105,11 +104,7 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(
-        self,
-        chain: crosscut::ChainWellKnownInfo,
-        policy: crosscut::policies::RuntimePolicy,
-    ) -> super::Reducer {
+    pub fn plugin(self, chain: crosscut::ChainWellKnownInfo) -> super::Reducer {
         let policy_ids: Option<Vec<Hash<28>>> = match &self.policy_ids_hex {
             Some(pids) => {
                 let ps = pids
@@ -125,7 +120,6 @@ impl Config {
         let reducer = Reducer {
             config: self,
             chain: chain.clone(),
-            policy: policy.clone(),
             time: crosscut::time::NaiveProvider::new(chain.clone()),
             policy_ids,
         };

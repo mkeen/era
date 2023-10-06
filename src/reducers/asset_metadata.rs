@@ -43,7 +43,6 @@ pub struct Config {
 
 pub struct Reducer {
     config: Config,
-    policy: crosscut::policies::RuntimePolicy,
     time: crosscut::time::NaiveProvider,
 }
 
@@ -383,14 +382,9 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(
-        self,
-        chain: crosscut::ChainWellKnownInfo,
-        policy: crosscut::policies::RuntimePolicy,
-    ) -> super::Reducer {
+    pub fn plugin(self, chain: crosscut::ChainWellKnownInfo) -> super::Reducer {
         let worker = Reducer {
             config: self,
-            policy: policy.clone(),
             time: crosscut::time::NaiveProvider::new(chain),
         };
 

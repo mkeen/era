@@ -93,7 +93,6 @@ pub struct TransactionPattern {
     pub is_valid: Option<bool>,
 }
 
-
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum Predicate {
@@ -133,11 +132,10 @@ fn eval_input_address(
     tx: &MultiEraTx,
     ctx: &model::BlockContext,
     pattern: &AddressPattern,
-    policy: &crosscut::policies::RuntimePolicy,
 ) -> Result<bool, crate::Error> {
     for input in tx.inputs() {
-        let utxo = ctx.find_utxo(&input.output_ref()).apply_policy(policy)?;
-        if let Some(utxo) = utxo {
+        let utxo = ctx.find_utxo(&input.output_ref());
+        if let Ok(utxo) = utxo {
             if let Some(addr) = utxo.address().ok() {
                 if pattern.matches(addr) {
                     return Ok(true);
@@ -154,11 +152,10 @@ fn eval_collateral_address(
     tx: &MultiEraTx,
     ctx: &model::BlockContext,
     pattern: &AddressPattern,
-    policy: &crosscut::policies::RuntimePolicy,
 ) -> Result<bool, crate::Error> {
     for input in tx.collateral() {
-        let utxo = ctx.find_utxo(&input.output_ref()).apply_policy(policy)?;
-        if let Some(utxo) = utxo {
+        let utxo = ctx.find_utxo(&input.output_ref());
+        if let Ok(utxo) = utxo {
             if let Some(addr) = utxo.address().ok() {
                 if pattern.matches(addr) {
                     return Ok(true);
@@ -189,13 +186,12 @@ fn eval_address(
     tx: &MultiEraTx,
     ctx: &model::BlockContext,
     pattern: &AddressPattern,
-    policy: &crosscut::policies::RuntimePolicy,
 ) -> Result<bool, crate::Error> {
     if eval_output_address(tx, pattern)? {
         return Ok(true);
     }
 
-    if eval_input_address(tx, ctx, pattern, policy)? {
+    if eval_input_address(tx, ctx, pattern)? {
         return Ok(true);
     }
 
@@ -203,7 +199,7 @@ fn eval_address(
         return Ok(true);
     }
 
-    if eval_collateral_address(tx, ctx, pattern, policy)? {
+    if eval_collateral_address(tx, ctx, pattern)? {
         return Ok(true);
     }
 
@@ -224,7 +220,7 @@ fn eval_block(block: &MultiEraBlock, pattern: &BlockPattern) -> Result<bool, cra
 
 fn eval_transaction(tx: &MultiEraTx, pattern: &TransactionPattern) -> Result<bool, crate::Error> {
     if let Some(b) = pattern.is_valid {
-        return Ok(tx.is_valid() == b)
+        return Ok(tx.is_valid() == b);
     }
 
     Ok(false)
@@ -236,10 +232,9 @@ fn eval_any_of(
     block: &MultiEraBlock,
     tx: &MultiEraTx,
     ctx: &model::BlockContext,
-    policy: &crosscut::policies::RuntimePolicy,
 ) -> Result<bool, crate::Error> {
     for p in predicates.iter() {
-        if eval_predicate(p, block, tx, ctx, policy)? {
+        if eval_predicate(p, block, tx, ctx)? {
             return Ok(true);
         }
     }
@@ -253,10 +248,9 @@ fn eval_all_of(
     block: &MultiEraBlock,
     tx: &MultiEraTx,
     ctx: &model::BlockContext,
-    policy: &crosscut::policies::RuntimePolicy,
 ) -> Result<bool, crate::Error> {
     for p in predicates.iter() {
-        if !eval_predicate(p, block, tx, ctx, policy)? {
+        if !eval_predicate(p, block, tx, ctx)? {
             return Ok(false);
         }
     }
@@ -269,17 +263,16 @@ pub fn eval_predicate(
     block: &MultiEraBlock,
     tx: &MultiEraTx,
     ctx: &model::BlockContext,
-    policy: &crosscut::policies::RuntimePolicy,
 ) -> Result<bool, crate::Error> {
     match predicate {
-        Predicate::Not(x) => eval_predicate(x, block, tx, ctx, policy).map(|x| !x),
-        Predicate::AnyOf(x) => eval_any_of(x, block, tx, ctx, policy),
-        Predicate::AllOf(x) => eval_all_of(x, block, tx, ctx, policy),
+        Predicate::Not(x) => eval_predicate(x, block, tx, ctx).map(|x| !x),
+        Predicate::AnyOf(x) => eval_any_of(x, block, tx, ctx),
+        Predicate::AllOf(x) => eval_all_of(x, block, tx, ctx),
         Predicate::OutputAddress(x) => eval_output_address(tx, x),
-        Predicate::InputAddress(x) => eval_input_address(tx, ctx, x, policy),
+        Predicate::InputAddress(x) => eval_input_address(tx, ctx, x),
         Predicate::WithdrawalAddress(x) => eval_withdrawal_address(tx, x),
-        Predicate::CollateralAddress(x) => eval_collateral_address(tx, ctx, x, policy),
-        Predicate::Address(x) => eval_address(tx, ctx, x, policy),
+        Predicate::CollateralAddress(x) => eval_collateral_address(tx, ctx, x),
+        Predicate::Address(x) => eval_address(tx, ctx, x),
         Predicate::Block(x) => eval_block(block, x),
         Predicate::Transaction(x) => eval_transaction(tx, x),
     }
@@ -289,10 +282,7 @@ pub fn eval_predicate(
 mod tests {
     use pallas::ledger::traverse::MultiEraBlock;
 
-    use crate::{
-        crosscut::policies::{ErrorAction, RuntimePolicy},
-        model::BlockContext,
-    };
+    use crate::model::BlockContext;
 
     use super::{eval_predicate, AddressPattern, Predicate};
 
@@ -301,16 +291,12 @@ mod tests {
         let bytes = hex::decode(cbor).unwrap();
         let block = MultiEraBlock::decode(&bytes).unwrap();
         let ctx = BlockContext::default();
-        let policy = RuntimePolicy {
-            missing_data: Some(ErrorAction::Skip),
-            ..Default::default()
-        };
 
         let idxs: Vec<_> = block
             .txs()
             .iter()
             .enumerate()
-            .filter(|(_, tx)| eval_predicate(predicate, &block, tx, &ctx, &policy).unwrap())
+            .filter(|(_, tx)| eval_predicate(predicate, &block, tx, &ctx).unwrap())
             .map(|(idx, _)| idx)
             .collect();
 

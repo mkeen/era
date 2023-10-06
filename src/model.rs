@@ -57,15 +57,13 @@ impl BlockContext {
     pub fn find_consumed_txos(
         &self,
         tx: &MultiEraTx,
-        policy: &RuntimePolicy,
     ) -> Result<Vec<(OutputRef, MultiEraOutput)>, Error> {
         let items = tx
             .consumes()
             .iter()
             .map(|i| i.output_ref())
             .map(|r| self.find_utxo(&r).map(|u| (r, u)))
-            .map(|r| r.apply_policy(policy))
-            .collect::<Result<Vec<_>, _>>()?
+            .collect::<Result<Vec<_>, _>>()
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();

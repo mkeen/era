@@ -36,7 +36,6 @@ impl Config {
         self,
         chain: &crosscut::ChainWellKnownInfo,
         intersect: &crosscut::IntersectConfig,
-        policy: &crosscut::policies::RuntimePolicy,
     ) -> (Cursor, Option<Bootstrapper>) {
         match self {
             Config::Skip(c) => {
@@ -52,14 +51,11 @@ impl Config {
 
             #[cfg(feature = "elastic")]
             Config::Elastic(c) => {
-                let elastic_s =
-                    Bootstrapper::Elastic(c.clone().bootstrapper(chain, intersect, policy));
+                let elastic_s = Bootstrapper::Elastic(c.clone().bootstrapper(chain, intersect));
                 let cursor = elastic_s.build_cursor();
                 (
                     cursor,
-                    Some(Bootstrapper::Elastic(
-                        c.bootstrapper(chain, intersect, policy),
-                    )),
+                    Some(Bootstrapper::Elastic(c.bootstrapper(chain, intersect))),
                 )
             }
         }

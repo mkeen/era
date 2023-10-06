@@ -34,19 +34,10 @@ impl Worker {
     fn on_roll_forward(
         &mut self,
         content: chainsync::HeaderContent,
-        policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         // parse the header and extract the point of the chain
 
-        let header = to_traverse(&content)
-            .apply_policy(policy)
-            .or_panic()
-            .unwrap();
-
-        let header = match header {
-            Some(x) => x,
-            None => return Ok(()),
-        };
+        let header = to_traverse(&content).unwrap();
 
         let point = Point::Specific(header.slot(), header.hash().to_vec());
 
@@ -78,7 +69,6 @@ impl Worker {
     async fn request_next(
         &mut self,
         chain_tip: &gasket::metrics::Gauge,
-        policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         log::info!("requesting next block");
 
@@ -93,7 +83,7 @@ impl Worker {
 
         match next {
             chainsync::NextResponse::RollForward(h, t) => {
-                self.on_roll_forward(h, policy)?;
+                self.on_roll_forward(h)?;
                 chain_tip.set(t.1 as i64);
                 Ok(())
             }
@@ -112,7 +102,6 @@ impl Worker {
     async fn await_next(
         &mut self,
         chain_tip: &gasket::metrics::Gauge,
-        policy: &crosscut::policies::RuntimePolicy,
         blocks: &mut crosscut::historic::BufferBlocks,
     ) -> Result<(), gasket::error::Error> {
         log::info!("awaiting next block (blocking)");
@@ -128,7 +117,7 @@ impl Worker {
 
         match next {
             chainsync::NextResponse::RollForward(h, t) => {
-                self.on_roll_forward(h, policy)?;
+                self.on_roll_forward(h)?;
                 chain_tip.set(t.1 as i64);
                 Ok(())
             }
@@ -149,7 +138,6 @@ pub struct Stage {
     pub cursor: storage::Cursor,
     pub intersect: crosscut::IntersectConfig,
     pub chain: crosscut::ChainWellKnownInfo,
-    pub policy: crosscut::policies::RuntimePolicy,
     pub blocks: crosscut::historic::BufferBlocks,
     pub finalize: Option<crosscut::FinalizeConfig>,
 
@@ -165,7 +153,9 @@ pub struct Stage {
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Worker {
     async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
-        let transport = Transport::setup(&stage.config.address, stage.chain.magic).or_retry()?;
+        let transport = Transport::setup(&stage.config.address, stage.chain.magic)
+            .await
+            .unwrap();
 
         let mut chainsync = chainsync::N2NClient::new(transport.channel2);
 
@@ -198,7 +188,7 @@ impl gasket::framework::Worker<Stage> for Worker {
         Ok(WorkSchedule::Unit(match client.has_agency() {
             true => {
                 log::info!("requesting next block");
-                self.request_next(&stage.chain_tip, &stage.policy)
+                self.request_next(&stage.chain_tip)
                     .await
                     .or_restart()
                     .unwrap();
@@ -206,7 +196,7 @@ impl gasket::framework::Worker<Stage> for Worker {
             }
             false => {
                 log::info!("awaiting next block (blocking)");
-                self.await_next(&stage.chain_tip, &stage.policy, &mut stage.blocks)
+                self.await_next(&stage.chain_tip, &mut stage.blocks)
                     .await
                     .or_restart()
                     .unwrap();
@@ -225,11 +215,7 @@ impl gasket::framework::Worker<Stage> for Worker {
 
             if let Some(rollback_cbor) = pop_rollback_block {
                 if let Some(last_good_block) = blocks.get_block_latest() {
-                    if let Some(parsed_last_good_block) = MultiEraBlock::decode(&last_good_block)
-                        .map_err(crate::Error::cbor)
-                        .apply_policy(&stage.policy)
-                        .unwrap()
-                    {
+                    if let Ok(parsed_last_good_block) = MultiEraBlock::decode(&last_good_block) {
                         rolled_back = true;
 
                         let point = Point::Specific(

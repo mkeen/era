@@ -47,7 +47,6 @@ impl Config {
             block_count: Default::default(),
             intersect: ctx.intersect.clone(),
             cursor,
-            policy: ctx.policy.clone(),
             chain: ctx.chain.clone(),
             blocks: ctx.blocks.clone().into(),
             finalize: ctx.finalize.clone(),

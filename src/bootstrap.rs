@@ -69,5 +69,4 @@ pub struct Context {
     pub intersect: crosscut::IntersectConfig,
     pub finalize: Option<crosscut::FinalizeConfig>,
     pub blocks: crosscut::historic::BlockConfig,
-    pub policy: crosscut::policies::RuntimePolicy,
 }

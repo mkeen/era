@@ -17,14 +17,12 @@ use sled::IVec;
 use crate::{
     bootstrap, crosscut,
     model::{self, BlockContext, EnrichedBlockPayload, RawBlockPayload},
-    prelude::AppliesPolicy,
 };
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
     pub db_path: String,
     pub rollback_db_path: Option<String>,
-    pub policy: crosscut::policies::RuntimePolicy,
 }
 
 impl Config {
@@ -302,15 +300,7 @@ impl gasket::framework::Worker<Stage> for Worker {
         if let Some((db, consumed_ring)) = all_dbs {
             match unit {
                 model::RawBlockPayload::RollForward(cbor) => {
-                    let block = MultiEraBlock::decode(&cbor)
-                        .map_err(crate::Error::cbor)
-                        .apply_policy(&stage.config.clone().policy)
-                        .or_panic()?;
-
-                    let block = match block {
-                        Some(x) => x,
-                        None => return Ok(()),
-                    };
+                    let block = MultiEraBlock::decode(&cbor).unwrap();
 
                     let txs = &block.txs();
 
@@ -331,33 +321,29 @@ impl gasket::framework::Worker<Stage> for Worker {
                 }
 
                 model::RawBlockPayload::RollBack(cbor, last_known_block_info, finalize) => {
-                    let block = MultiEraBlock::decode(&cbor)
-                        .map_err(crate::Error::cbor)
-                        .apply_policy(&stage.config.clone().policy);
+                    let block = MultiEraBlock::decode(&cbor);
 
                     if let Ok(block) = block {
-                        if let Some(block) = block {
-                            let txs = block.txs();
+                        let txs = block.txs();
 
-                            // Revert Anything to do with this block
-                            self.remove_produced_utxos(db, &txs)
-                                .expect("todo: panic error");
-                            self.replace_consumed_utxos(db, consumed_ring, &txs)
-                                .expect("todo: panic error");
+                        // Revert Anything to do with this block
+                        self.remove_produced_utxos(db, &txs)
+                            .expect("todo: panic error");
+                        self.replace_consumed_utxos(db, consumed_ring, &txs)
+                            .expect("todo: panic error");
 
-                            let ctx = self.par_fetch_referenced_utxos(db, &txs).or_restart()?;
+                        let ctx = self.par_fetch_referenced_utxos(db, &txs).or_restart()?;
 
-                            return stage
-                                .output
-                                .send(model::EnrichedBlockPayload::roll_back(
-                                    cbor.clone(),
-                                    ctx,
-                                    last_known_block_info.clone(),
-                                    finalize.clone(),
-                                ))
-                                .await
-                                .or_panic();
-                        }
+                        return stage
+                            .output
+                            .send(model::EnrichedBlockPayload::roll_back(
+                                cbor.clone(),
+                                ctx,
+                                last_known_block_info.clone(),
+                                finalize.clone(),
+                            ))
+                            .await
+                            .or_panic();
                     }
 
                     stage.blocks_counter.inc(1);
