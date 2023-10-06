@@ -7,6 +7,8 @@ use gasket::messaging::tokio::OutputPort;
 
 use crate::model::CRDTCommand;
 
+use crate::crosscut;
+
 #[derive(Deserialize)]
 pub struct Config {
     pub key_prefix: Option<String>,
@@ -42,6 +44,7 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         rollback: bool,
         output: &mut OutputPort<CRDTCommand>,
+        error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         for tx in block.txs() {
             if tx.is_valid() {

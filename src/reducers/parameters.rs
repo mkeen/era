@@ -21,6 +21,7 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         rollback: bool,
         output: &mut OutputPort<model::CRDTCommand>,
+        error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         if rollback {
             return Ok(());

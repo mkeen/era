@@ -15,14 +15,18 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub fn bootstrap(
-        source: Option<sources::Bootstrapper>,
+        ctx: &Context,
+        sources_config: sources::Config,
         enrich: Option<enrich::Bootstrapper>,
         reducer: reducers::worker::Stage,
         storage: Option<storage::Bootstrapper>,
     ) -> Self {
-        let source = source.unwrap();
         let enrich = enrich.unwrap();
-        let storage = storage.unwrap();
+        let mut storage = storage.unwrap();
+
+        let cursor = storage.build_cursor();
+
+        let source = sources_config.bootstrapper(&ctx, cursor).unwrap();
 
         let mut pipe = Self {
             tethers: Vec::new(),
@@ -69,4 +73,5 @@ pub struct Context {
     pub intersect: crosscut::IntersectConfig,
     pub finalize: Option<crosscut::FinalizeConfig>,
     pub blocks: crosscut::historic::BlockConfig,
+    pub error_policy: crosscut::policies::RuntimePolicy,
 }

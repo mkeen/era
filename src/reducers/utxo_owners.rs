@@ -101,6 +101,7 @@ impl Reducer {
         ctx: &model::BlockContext,
         rollback: bool,
         output: &mut super::OutputPort<model::CRDTCommand>,
+        error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         if rollback {
             return Ok(());

@@ -73,6 +73,7 @@ impl Reducer {
         &mut self,
         block: &'b MultiEraBlock<'b>,
         output: &mut OutputPort<model::CRDTCommand>,
+        error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         for tx in block.txs().into_iter() {
             for (_, out) in tx.produces().iter() {

@@ -333,6 +333,7 @@ impl Reducer {
         block: &MultiEraBlock<'b>,
         rollback: bool,
         output: &mut OutputPort<CRDTCommand>,
+        error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         for tx in block.txs() {
             if tx.metadata().as_alonzo().iter().any(|meta| {

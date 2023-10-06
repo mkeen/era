@@ -68,16 +68,31 @@ impl Reducer {
         ctx: &model::BlockContext,
         rollback: bool,
         output: &mut OutputPort<CRDTCommand>,
+        error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         match self {
-            Reducer::UtxoOwners(x) => x.reduce_block(block, ctx, rollback, output).await,
-            Reducer::UtxoByAddress(x) => x.reduce_block(block, ctx, rollback, output).await,
-            Reducer::Parameters(x) => x.reduce_block(block, rollback, output).await,
-            Reducer::AssetMetadata(x) => x.reduce_block(block, rollback, output).await,
-            Reducer::PolicyAssetsMoved(x) => x.reduce_block(block, output).await,
-            Reducer::MultiAssetBalances(x) => x.reduce_block(block, ctx, rollback, output).await,
-            Reducer::AdaHandle(x) => x.reduce_block(block, ctx, rollback, output).await,
-            Reducer::StakeToPool(x) => x.reduce_block(block, rollback, output).await,
+            Reducer::UtxoOwners(x) => {
+                x.reduce_block(block, ctx, rollback, output, error_policy)
+                    .await
+            }
+            Reducer::UtxoByAddress(x) => {
+                x.reduce_block(block, ctx, rollback, output, error_policy)
+                    .await
+            }
+            Reducer::Parameters(x) => x.reduce_block(block, rollback, output, error_policy).await,
+            Reducer::AssetMetadata(x) => {
+                x.reduce_block(block, rollback, output, error_policy).await
+            }
+            Reducer::PolicyAssetsMoved(x) => x.reduce_block(block, output, error_policy).await,
+            Reducer::MultiAssetBalances(x) => {
+                x.reduce_block(block, ctx, rollback, output, error_policy)
+                    .await
+            }
+            Reducer::AdaHandle(x) => {
+                x.reduce_block(block, ctx, rollback, output, error_policy)
+                    .await
+            }
+            Reducer::StakeToPool(x) => x.reduce_block(block, rollback, output, error_policy).await,
         }
     }
 }

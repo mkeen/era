@@ -16,10 +16,14 @@ pub struct Config {
 
 impl Config {
     pub fn bootstrapper(self) -> Stage {
+        let cursor = Cursor {
+            last_point: Arc::new(Mutex::new(None)),
+        };
+
         Stage {
             config: self.clone(),
             input: Default::default(),
-            cursor: Cursor { last_point: None },
+            cursor,
             ops_count: Default::default(),
         }
     }
@@ -27,7 +31,7 @@ impl Config {
 
 #[derive(Clone)]
 pub struct Cursor {
-    last_point: Option<crosscut::PointArg>,
+    last_point: Arc<Mutex<Option<crosscut::PointArg>>>,
 }
 
 impl Cursor {

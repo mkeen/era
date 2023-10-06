@@ -37,26 +37,18 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(
-        self,
-        chain: &crosscut::ChainWellKnownInfo,
-        intersect: &crosscut::IntersectConfig,
-    ) -> Stage {
+    pub fn bootstrapper(self) -> Stage {
         Stage {
             config: self.clone(),
             input: Default::default(),
             ops_count: Default::default(),
-            cursor: Cursor {
-                config: self.clone(),
-            },
+            cursor: Cursor {},
         }
     }
 }
 
 #[derive(Clone)]
-pub struct Cursor {
-    config: Config,
-}
+pub struct Cursor {}
 
 impl Cursor {
     pub fn last_point(&mut self) -> Result<Option<crosscut::PointArg>, crate::Error> {

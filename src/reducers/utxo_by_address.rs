@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use gasket::messaging::tokio::{InputPort, OutputPort};
 
+use crate::crosscut::policies::AppliesPolicy;
 use crate::model::CRDTCommand;
 use crate::{crosscut, model, prelude::*};
 
@@ -161,8 +162,18 @@ impl Reducer {
         input: &OutputRef,
         output: &mut OutputPort<CRDTCommand>,
         rollback: bool,
+        error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
-        let utxo = ctx.find_utxo(input).unwrap();
+        let utxo = ctx
+            .find_utxo(input)
+            .apply_policy(error_policy)
+            .or_panic()
+            .unwrap();
+
+        let utxo = match utxo {
+            Some(x) => x,
+            None => return Ok(()),
+        };
 
         let address = utxo.address().map(|x| x.to_string()).unwrap();
 
@@ -294,10 +305,11 @@ impl Reducer {
         ctx: &model::BlockContext,
         rollback: bool,
         output: &mut OutputPort<CRDTCommand>,
+        error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         for tx in block.txs().into_iter() {
             for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
-                self.process_consumed_txo(&ctx, &consumed, output, rollback)
+                self.process_consumed_txo(&ctx, &consumed, output, rollback, error_policy)
                     .expect("TODO: panic message");
             }
 

@@ -25,6 +25,7 @@ impl Worker {
         last_good_block_rollback_info: (Point, i64),
         final_block_in_rollback_batch: bool,
         output: &mut OutputPort<CRDTCommand>,
+        error_policy: &crosscut::policies::RuntimePolicy,
         reducers: &mut Vec<Reducer>,
     ) -> Option<i64> {
         let block = MultiEraBlock::decode(block).unwrap();
@@ -39,10 +40,14 @@ impl Worker {
 
         output
             .send(model::CRDTCommand::block_starting(&block).into())
-            .await;
+            .await
+            .unwrap();
 
         for reducer in reducers {
-            reducer.reduce_block(&block, ctx, rollback, output).await;
+            reducer
+                .reduce_block(&block, ctx, rollback, output, error_policy)
+                .await
+                .unwrap();
         }
 
         output
@@ -53,7 +58,8 @@ impl Worker {
                 )
                 .into(),
             )
-            .await;
+            .await
+            .unwrap();
 
         Some(block_number)
     }
@@ -69,6 +75,8 @@ pub fn bootstrap(ctx: &Context, reducers: Vec<reducers::Config>) -> Stage {
         output: Default::default(),
         chain_tip: Default::default(),
         ops_count: Default::default(),
+        last_block: Default::default(),
+        error_policy: ctx.error_policy.clone(),
     }
 }
 
@@ -82,6 +90,7 @@ pub struct Stage {
     config: Config,
 
     reducers: Vec<Reducer>,
+    error_policy: crosscut::policies::RuntimePolicy,
 
     pub input: InputPort<EnrichedBlockPayload>,
     pub output: OutputPort<CRDTCommand>,
@@ -91,6 +100,9 @@ pub struct Stage {
 
     #[metric]
     ops_count: gasket::metrics::Counter,
+
+    #[metric]
+    last_block: gasket::metrics::Gauge,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -116,16 +128,20 @@ impl gasket::framework::Worker<Stage> for Worker {
     ) -> Result<(), WorkerError> {
         match unit {
             model::EnrichedBlockPayload::RollForward(block, ctx) => {
-                self.reduce_block(
-                    &block,
-                    false,
-                    &ctx,
-                    (Point::Origin, 0),
-                    false,
-                    &mut stage.output,
-                    &mut stage.reducers,
-                )
-                .await;
+                stage.last_block.set(
+                    self.reduce_block(
+                        &block,
+                        false,
+                        &ctx,
+                        (Point::Origin, 0),
+                        false,
+                        &mut stage.output,
+                        &stage.error_policy,
+                        &mut stage.reducers,
+                    )
+                    .await
+                    .unwrap(),
+                );
             }
             model::EnrichedBlockPayload::RollBack(
                 block,
@@ -133,16 +149,20 @@ impl gasket::framework::Worker<Stage> for Worker {
                 last_block_rollback_info,
                 final_block_in_batch,
             ) => {
-                self.reduce_block(
-                    &block,
-                    true,
-                    &ctx,
-                    last_block_rollback_info.clone(),
-                    final_block_in_batch.clone(),
-                    &mut stage.output,
-                    &mut stage.reducers,
-                )
-                .await;
+                stage.last_block.set(
+                    self.reduce_block(
+                        &block,
+                        true,
+                        &ctx,
+                        last_block_rollback_info.clone(),
+                        final_block_in_batch.clone(),
+                        &mut stage.output,
+                        &stage.error_policy,
+                        &mut stage.reducers,
+                    )
+                    .await
+                    .unwrap(),
+                );
             }
         }
 

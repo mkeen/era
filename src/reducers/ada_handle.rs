@@ -49,6 +49,7 @@ impl Reducer {
         ctx: &model::BlockContext,
         rollback: bool,
         output: &mut OutputPort<CRDTCommand>,
+        error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         for tx in block.txs().iter() {
             if rollback {

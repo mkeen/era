@@ -271,6 +271,7 @@ impl Reducer {
         ctx: &model::BlockContext,
         rollback: bool,
         output: &mut OutputPort<model::CRDTCommand>,
+        error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         let slot = block.slot();
 

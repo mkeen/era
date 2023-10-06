@@ -3,14 +3,13 @@ use log::*;
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraHeader};
 use pallas::network::facades::PeerClient;
 use pallas::network::miniprotocols::chainsync::{HeaderContent, NextResponse};
-use pallas::network::miniprotocols::{blockfetch, chainsync, Point};
+use pallas::network::miniprotocols::{chainsync, Point};
 
 use gasket::framework::*;
 
 use crate::crosscut::IntersectConfig;
 use crate::model::RawBlockPayload;
-use crate::sources::n2n::transport::Transport;
-use crate::{crosscut, model, sources, sources::utils, storage, Error};
+use crate::{crosscut, model, sources, storage, Error};
 
 use crate::prelude::*;
 
@@ -188,11 +187,6 @@ pub struct Stage {
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Worker {
     async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
-        log::warn!(
-            "going to try and bootstrap chainsync {}",
-            stage.config.address
-        );
-
         let mut peer_session = PeerClient::connect(&stage.config.address, stage.chain.magic)
             .await
             .unwrap();
@@ -200,10 +194,6 @@ impl gasket::framework::Worker<Stage> for Worker {
         intersect_from_config(&mut peer_session, &stage.intersect)
             .await
             .unwrap();
-
-        log::warn!("started up chainsync");
-
-        log::warn!("hey");
 
         Ok(Self {
             min_depth: stage.config.min_depth.unwrap_or(10 as usize),
@@ -216,7 +206,6 @@ impl gasket::framework::Worker<Stage> for Worker {
         &mut self,
         _: &mut Stage,
     ) -> Result<WorkSchedule<NextResponse<HeaderContent>>, WorkerError> {
-        log::warn!("jhhuuioh");
         let client = self.peer.chainsync();
 
         Ok(WorkSchedule::Unit(match client.has_agency() {
@@ -236,8 +225,6 @@ impl gasket::framework::Worker<Stage> for Worker {
         unit: &NextResponse<HeaderContent>,
         stage: &mut Stage,
     ) -> Result<(), WorkerError> {
-        let mut rolled_back = false;
-
         let blocks = &mut stage.blocks;
 
         loop {
@@ -246,8 +233,6 @@ impl gasket::framework::Worker<Stage> for Worker {
             if let Some(rollback_cbor) = pop_rollback_block {
                 if let Some(last_good_block) = blocks.get_block_latest() {
                     if let Ok(parsed_last_good_block) = MultiEraBlock::decode(&last_good_block) {
-                        rolled_back = true;
-
                         let point = Point::Specific(
                             parsed_last_good_block.slot(),
                             parsed_last_good_block.hash().to_vec(),
@@ -264,10 +249,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                             .unwrap();
 
                         stage.block_count.inc(1);
-
-                        // if crosscut::should_finalize(&self.finalize, &last_point) {
-                        //     return Ok(gasket::runtime::WorkOutcome::Done);
-                        // }
                     }
                 }
             } else {
@@ -281,7 +262,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                 stage.chain_tip.set(t.1 as i64);
             }
             NextResponse::RollBackward(p, t) => {
-                self.chain_buffer.roll_back(&p);
+                self.on_rollback(p, blocks).unwrap();
                 stage.chain_tip.set(t.1 as i64);
             }
             NextResponse::Await => {
@@ -302,13 +283,13 @@ impl gasket::framework::Worker<Stage> for Worker {
 
             blocks.insert_block(&point, &block);
 
+            stage.block_count.inc(1);
+
             stage
                 .output
                 .send(model::RawBlockPayload::roll_forward(block))
                 .await
                 .unwrap();
-
-            stage.block_count.inc(1);
 
             // evaluate if we should finalize the thread according to config
 
