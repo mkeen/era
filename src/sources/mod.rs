@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use crate::{
     bootstrap, crosscut, model,
     storage::{self, Cursor},
@@ -20,9 +22,14 @@ pub enum Config {
 }
 
 impl Config {
-    pub fn bootstrapper(self, ctx: &bootstrap::Context, cursor: Cursor) -> Option<Bootstrapper> {
+    pub fn bootstrapper(
+        self,
+        ctx: &bootstrap::Context,
+        cursor: Cursor,
+        blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
+    ) -> Option<Bootstrapper> {
         match self {
-            Config::N2N(c) => Some(Bootstrapper::N2N(c.bootstrapper(ctx, cursor))),
+            Config::N2N(c) => Some(Bootstrapper::N2N(c.bootstrapper(ctx, cursor, blocks))),
         }
     }
 }
@@ -38,7 +45,13 @@ impl Bootstrapper {
         }
     }
 
-    pub fn spawn_stage(self, pipeline: &bootstrap::Pipeline) -> Tether {
+    pub fn borrow_blocks(mut self) -> Arc<Mutex<crosscut::historic::BufferBlocks>> {
+        match self {
+            Bootstrapper::N2N(s) => s.blocks,
+        }
+    }
+
+    pub fn spawn_stage(mut self, pipeline: &bootstrap::Pipeline) -> Tether {
         match self {
             Bootstrapper::N2N(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),
         }

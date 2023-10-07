@@ -27,7 +27,7 @@ pub struct Config {
 
 impl Config {
     pub fn bootstrapper(mut self, ctx: &bootstrap::Context) -> Stage {
-        self.rollback_db_path = Some(ctx.blocks.rollback_db_path.clone());
+        self.rollback_db_path = Some(ctx.block.rollback_db_path.clone());
 
         Stage {
             config: self,

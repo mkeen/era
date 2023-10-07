@@ -1,14 +1,17 @@
+use std::sync::{Arc, Mutex};
+
 use config::builder::DefaultState;
 use log::*;
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraHeader};
 use pallas::network::facades::PeerClient;
-use pallas::network::miniprotocols::chainsync::{HeaderContent, NextResponse};
+use pallas::network::miniprotocols::chainsync::{HeaderContent, NextResponse, RollbackBuffer};
 use pallas::network::miniprotocols::{chainsync, Point};
 
 use gasket::framework::*;
 
 use crate::crosscut::IntersectConfig;
 use crate::model::RawBlockPayload;
+use crate::storage::Cursor;
 use crate::{crosscut, model, sources, storage, Error};
 
 use crate::prelude::*;
@@ -27,138 +30,79 @@ pub type OutputPort = gasket::messaging::tokio::OutputPort<RawBlockPayload>;
 async fn intersect_from_config(
     peer: &mut PeerClient,
     intersect: &IntersectConfig,
-) -> Result<(), WorkerError> {
+    mut cursor: Cursor,
+) -> Result<Option<Point>, WorkerError> {
     let chainsync = peer.chainsync();
 
-    let intersect = match intersect {
-        IntersectConfig::Origin => {
-            info!("intersecting origin");
-            chainsync.intersect_origin().await.or_restart().unwrap();
+    match cursor.last_point().unwrap() {
+        Some(x) => {
+            log::info!("found existing cursor in storage plugin: {:?}", x);
+            let point = x.try_into().unwrap();
+            chainsync
+                .find_intersect(vec![point])
+                .await
+                .map_err(crate::Error::ouroboros)
+                .unwrap();
         }
-        IntersectConfig::Tip => {
-            info!("intersecting tip");
-            chainsync.intersect_tip().await.or_restart().unwrap();
+        None => {
+            log::info!("no cursor found in storage plugin");
         }
-        IntersectConfig::Point(..) => {
-            info!("intersecting specific points");
-            let points = intersect.get_fallbacks().unwrap_or_default();
-            let (point, _) = chainsync.find_intersect(points).await.or_restart().unwrap();
+    };
+
+    match &intersect {
+        crosscut::IntersectConfig::Origin => {
+            let point = chainsync
+                .intersect_origin()
+                .await
+                .map_err(crate::Error::ouroboros)
+                .unwrap();
+            Ok(Some(point))
         }
-        IntersectConfig::Fallbacks(_) => {
+        crosscut::IntersectConfig::Tip => {
+            let point = chainsync
+                .intersect_tip()
+                .await
+                .map_err(crate::Error::ouroboros)
+                .unwrap();
+            Ok(Some(point))
+        }
+        crosscut::IntersectConfig::Point(_, _) => {
+            let point = intersect.get_point().expect("point value");
+            let (point, _) = chainsync
+                .find_intersect(vec![point])
+                .await
+                .map_err(crate::Error::ouroboros)
+                .unwrap();
+            Ok(point)
+        }
+        crosscut::IntersectConfig::Fallbacks(_) => {
             let points = intersect.get_fallbacks().expect("fallback values");
             let (point, _) = chainsync
                 .find_intersect(points)
                 .await
                 .map_err(crate::Error::ouroboros)
                 .unwrap();
+            Ok(point)
         }
-    };
-
-    Ok(())
+    }
 }
 
 pub struct Worker {
     min_depth: usize,
     peer: PeerClient,
-    chain_buffer: chainsync::RollbackBuffer,
+    chain_buffer: RollbackBuffer,
 }
 
 impl Worker {
     fn on_roll_forward(&mut self, content: &HeaderContent) -> Result<(), gasket::error::Error> {
-        // parse the header and extract the point of the chain
-
         let header = to_traverse(&content).unwrap();
-
         let point = Point::Specific(header.slot(), header.hash().to_vec());
-
         // track the new point in our memory buffer
-        log::warn!("rolling forward to point {:?}", point);
+        log::warn!("queueing point for processing {:?}", point);
         self.chain_buffer.roll_forward(point);
 
         Ok(())
     }
-
-    fn on_rollback(
-        &mut self,
-        point: &Point,
-        blocks: &mut crosscut::historic::BufferBlocks,
-    ) -> Result<(), gasket::error::Error> {
-        match self.chain_buffer.roll_back(point) {
-            chainsync::RollbackEffect::Handled => {
-                log::warn!("handled rollback within buffer {:?}", point);
-                Ok(())
-            }
-            chainsync::RollbackEffect::OutOfScope => {
-                log::warn!("rolling backward to point {:?}", point);
-                blocks.enqueue_rollback_batch(point);
-                Ok(())
-            }
-        }
-    }
-
-    // async fn request_next(
-    //     &mut self,
-    //     chain_tip: &gasket::metrics::Gauge,
-    // ) -> Result<(), gasket::error::Error> {
-    //     log::info!("requesting next block");
-
-    //     let next = self
-    //         .chainsync
-    //         .as_mut()
-    //         .unwrap()
-    //         .request_next()
-    //         .await
-    //         .or_restart()
-    //         .unwrap();
-
-    //     match next {
-    //         chainsync::NextResponse::RollForward(h, t) => {
-    //             self.on_roll_forward(h)?;
-    //             chain_tip.set(t.1 as i64);
-    //             Ok(())
-    //         }
-    //         chainsync::NextResponse::RollBackward(p, t) => {
-    //             self.chain_buffer.roll_back(&p); // just rollback the chain buffer... dont do anything with rollback data on initial sync
-    //             chain_tip.set(t.1 as i64);
-    //             Ok(())
-    //         }
-    //         chainsync::NextResponse::Await => {
-    //             log::info!("chain-sync reached the tip of the chain");
-    //             Ok(())
-    //         }
-    //     }
-    // }
-
-    // async fn await_next(
-    //     &mut self,
-    //     chain_tip: &gasket::metrics::Gauge,
-    //     blocks: &mut crosscut::historic::BufferBlocks,
-    // ) -> Result<(), gasket::error::Error> {
-    //     log::info!("awaiting next block (blocking)");
-
-    //     let next = self
-    //         .chainsync
-    //         .as_mut()
-    //         .unwrap()
-    //         .recv_while_must_reply()
-    //         .await
-    //         .or_restart()
-    //         .unwrap();
-
-    //     match next {
-    //         chainsync::NextResponse::RollForward(h, t) => {
-    //             self.on_roll_forward(h)?;
-    //             chain_tip.set(t.1 as i64);
-    //             Ok(())
-    //         }
-    //         chainsync::NextResponse::RollBackward(p, t) => {
-    //             self.on_rollback(&p, blocks)?;
-    //             chain_tip.set(t.1 as i64);
-    //             Ok(())
-    //         }
-    //         _ => unreachable!("protocol invariant not respected in chain-sync state machine"),
-    //     }
-    // }
 }
 
 #[derive(Stage)]
@@ -172,7 +116,7 @@ pub struct Stage {
     pub cursor: storage::Cursor,
     pub intersect: crosscut::IntersectConfig,
     pub chain: crosscut::ChainWellKnownInfo,
-    pub blocks: crosscut::historic::BufferBlocks,
+    pub blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
     pub finalize: Option<crosscut::FinalizeConfig>,
 
     pub output: OutputPort,
@@ -191,7 +135,7 @@ impl gasket::framework::Worker<Stage> for Worker {
             .await
             .unwrap();
 
-        intersect_from_config(&mut peer_session, &stage.intersect)
+        intersect_from_config(&mut peer_session, &stage.intersect, stage.cursor.clone())
             .await
             .unwrap();
 
@@ -225,7 +169,30 @@ impl gasket::framework::Worker<Stage> for Worker {
         unit: &NextResponse<HeaderContent>,
         stage: &mut Stage,
     ) -> Result<(), WorkerError> {
-        let blocks = &mut stage.blocks;
+        let mut blocks = stage.blocks.lock().unwrap();
+
+        match unit {
+            NextResponse::RollForward(h, t) => {
+                self.on_roll_forward(&h).unwrap();
+                stage.chain_tip.set(t.1 as i64);
+            }
+            NextResponse::RollBackward(p, t) => {
+                match self.chain_buffer.roll_back(&p) {
+                    chainsync::RollbackEffect::Handled => {
+                        log::warn!("handled rollback within buffer for point {:?}", p);
+                    }
+                    chainsync::RollbackEffect::OutOfScope => {
+                        log::warn!("rolling backward away from point {:?}", p);
+
+                        blocks.enqueue_rollback_batch(&p);
+                    }
+                }
+                stage.chain_tip.set(t.1 as i64);
+            }
+            NextResponse::Await => {
+                log::info!("chain-sync reached the tip of the chain");
+            }
+        }
 
         loop {
             let pop_rollback_block = blocks.rollback_pop();
@@ -233,6 +200,8 @@ impl gasket::framework::Worker<Stage> for Worker {
             if let Some(rollback_cbor) = pop_rollback_block {
                 if let Some(last_good_block) = blocks.get_block_latest() {
                     if let Ok(parsed_last_good_block) = MultiEraBlock::decode(&last_good_block) {
+                        warn!("backward happening");
+
                         let point = Point::Specific(
                             parsed_last_good_block.slot(),
                             parsed_last_good_block.hash().to_vec(),
@@ -256,47 +225,39 @@ impl gasket::framework::Worker<Stage> for Worker {
             }
         }
 
-        match unit {
-            NextResponse::RollForward(h, t) => {
-                self.on_roll_forward(h).unwrap();
-                stage.chain_tip.set(t.1 as i64);
-            }
-            NextResponse::RollBackward(p, t) => {
-                self.on_rollback(p, blocks).unwrap();
-                stage.chain_tip.set(t.1 as i64);
-            }
-            NextResponse::Await => {
-                log::info!("chain-sync reached the tip of the chain");
-            }
-        }
-
         // see if we have points that already reached certain depth
-        let ready = self.chain_buffer.pop_with_depth(self.min_depth);
+        if self.chain_buffer.size() >= self.min_depth {
+            let ready = self.chain_buffer.pop_with_depth(self.min_depth);
 
-        for point in ready {
-            let block = self
-                .peer
-                .blockfetch()
-                .fetch_single(point.clone())
-                .await
-                .or_restart()?;
+            for point in ready {
+                let block = self
+                    .peer
+                    .blockfetch()
+                    .fetch_single(point.clone())
+                    .await
+                    .or_restart()?;
 
-            blocks.insert_block(&point, &block);
+                stage.block_count.inc(1);
 
-            stage.block_count.inc(1);
+                stage
+                    .output
+                    .send(model::RawBlockPayload::roll_forward(block))
+                    .await
+                    .unwrap();
 
-            stage
-                .output
-                .send(model::RawBlockPayload::roll_forward(block))
-                .await
-                .unwrap();
+                // evaluate if we should finalize the thread according to config
 
-            // evaluate if we should finalize the thread according to config
-
-            // if crosscut::should_finalize(&Some(stage.config.finalize.clone()), &point) {
-            //     return Ok(()); // i think this is effectively a no-op that does nothing now... but this is designed to never shut down anyway... night fully remove should_finalize
-            // }
+                // if crosscut::should_finalize(&Some(stage.config.finalize.clone()), &point) {
+                //     return Ok(()); // i think this is effectively a no-op that does nothing now... but this is designed to never shut down anyway... night fully remove should_finalize
+                // }
+            }
         }
+
+        Ok(())
+    }
+
+    async fn teardown(&mut self) -> Result<(), WorkerError> {
+        self.peer.abort();
 
         Ok(())
     }

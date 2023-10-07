@@ -1,5 +1,8 @@
 use crate::{bootstrap, crosscut, enrich, reducers, sources, storage};
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use gasket::{
     messaging::tokio::connect_ports,
@@ -9,7 +12,6 @@ use gasket::{
 
 pub struct Pipeline {
     pub policy: Policy,
-
     pub tethers: Vec<Tether>,
 }
 
@@ -18,27 +20,35 @@ impl Pipeline {
         ctx: &Context,
         sources_config: sources::Config,
         enrich: Option<enrich::Bootstrapper>,
-        reducer: reducers::worker::Stage,
-        storage: Option<storage::Bootstrapper>,
+        mut reducer: reducers::worker::Stage,
+        storage_config: storage::Config,
     ) -> Self {
-        let enrich = enrich.unwrap();
-        let mut storage = storage.unwrap();
-
-        let cursor = storage.build_cursor();
-
-        let source = sources_config.bootstrapper(&ctx, cursor).unwrap();
-
         let mut pipe = Self {
-            tethers: Vec::new(),
             policy: Policy {
                 tick_timeout: Some(Duration::from_secs(10)),
                 bootstrap_retry: retries::Policy::default(),
                 work_retry: retries::Policy::default(),
                 teardown_retry: retries::Policy::default(),
             },
+            tethers: Vec::new(),
         };
 
-        pipe.build(source, enrich, reducer, storage);
+        let mut enrich = enrich.unwrap();
+
+        let mut storage = storage_config.bootstrapper(ctx.block.clone()).unwrap();
+
+        let mut source = sources_config
+            .bootstrapper(&ctx, storage.build_cursor(), storage.borrow_blocks())
+            .unwrap();
+
+        connect_ports(source.borrow_output_port(), enrich.borrow_input_port(), 100);
+        connect_ports(enrich.borrow_output_port(), &mut reducer.input, 100);
+        connect_ports(&mut reducer.output, storage.borrow_input_port(), 100);
+
+        pipe.register_stage(storage.spawn_stage(&pipe));
+        pipe.register_stage(spawn_stage(reducer, pipe.policy.clone()));
+        pipe.register_stage(enrich.spawn_stage(&pipe));
+        pipe.register_stage(source.spawn_stage(&pipe));
 
         pipe
     }
@@ -46,32 +56,12 @@ impl Pipeline {
     pub fn register_stage(&mut self, tether: Tether) {
         self.tethers.push(tether);
     }
-
-    pub fn build(
-        &mut self,
-        mut source: sources::Bootstrapper,
-        mut enrich: enrich::Bootstrapper,
-        mut reducer: reducers::worker::Stage,
-        mut storage: storage::Bootstrapper,
-    ) {
-        let reducer_input = &mut reducer.input;
-        connect_ports(source.borrow_output_port(), enrich.borrow_input_port(), 100);
-
-        connect_ports(enrich.borrow_output_port(), reducer_input, 100);
-
-        connect_ports(&mut reducer.output, storage.borrow_input_port(), 100);
-
-        self.register_stage(storage.spawn_stage(self));
-        self.register_stage(spawn_stage(reducer, self.policy.clone()));
-        self.register_stage(enrich.spawn_stage(self));
-        self.register_stage(source.spawn_stage(self));
-    }
 }
 
 pub struct Context {
     pub chain: crosscut::ChainWellKnownInfo,
     pub intersect: crosscut::IntersectConfig,
     pub finalize: Option<crosscut::FinalizeConfig>,
-    pub blocks: crosscut::historic::BlockConfig,
+    pub block: crosscut::historic::BlockConfig,
     pub error_policy: crosscut::policies::RuntimePolicy,
 }

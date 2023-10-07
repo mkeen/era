@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use elasticsearch::Elasticsearch;
 
 use elasticsearch::http::response::Response;
@@ -37,12 +39,13 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(self) -> Stage {
+    pub fn bootstrapper(self, blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>) -> Stage {
         Stage {
             config: self.clone(),
             input: Default::default(),
             ops_count: Default::default(),
             cursor: Cursor {},
+            blocks,
         }
     }
 }
@@ -71,7 +74,7 @@ async fn recv_batch(input: &mut InputPort<CRDTCommand>) -> Result<Batch, gasket:
         match input.recv().await {
             Ok(x) => match x.payload {
                 CRDTCommand::BlockStarting(_) => (),
-                CRDTCommand::BlockFinished(_, _) => {
+                CRDTCommand::BlockFinished(_, _, _) => {
                     batch.block_end = Some(x.payload);
                     return Ok(batch);
                 }
@@ -99,7 +102,7 @@ async fn apply_command(cmd: CRDTCommand, client: &Elasticsearch) -> Option<ESRes
             .send()
             .await
             .into(),
-        CRDTCommand::BlockFinished(_, _) => {
+        CRDTCommand::BlockFinished(_, _, _) => {
             log::warn!("Elasticsearch storage doesn't support cursors ATM");
             None
         }
@@ -147,6 +150,7 @@ async fn apply_batch(batch: Batch, client: &Elasticsearch) -> Result<(), gasket:
 pub struct Stage {
     config: Config,
     pub cursor: Cursor,
+    pub blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
 
     pub input: InputPort<CRDTCommand>,
 

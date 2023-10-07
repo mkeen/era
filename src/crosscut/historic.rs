@@ -86,7 +86,7 @@ impl BufferBlocks {
     }
 
     pub fn enqueue_rollback_batch(&mut self, from: &Point) -> usize {
-        self.get_rollback_range(from).len()
+        self.get_rollback_range(&from.clone()).len()
     }
 
     pub fn rollback_pop(&mut self) -> Option<Vec<u8>> {

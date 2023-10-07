@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::{str::FromStr, time::Duration};
 
 use gasket::framework::*;
@@ -30,7 +31,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(&self) -> Stage {
+    pub fn bootstrapper(&self, blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>) -> Stage {
         Stage {
             config: self.clone(),
             cursor: Cursor {
@@ -38,6 +39,7 @@ impl Config {
             },
             input: Default::default(),
             ops_count: Default::default(),
+            blocks,
         }
     }
 
@@ -75,6 +77,7 @@ impl Cursor {
 pub struct Stage {
     config: Config,
     pub cursor: Cursor,
+    pub blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
 
     pub input: InputPort<CRDTCommand>,
 
@@ -277,15 +280,21 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                 self.connection.as_mut().unwrap().del(key).or_restart()?;
             }
-            model::CRDTCommand::BlockFinished(point, finalize) => {
+            model::CRDTCommand::BlockFinished(point, finalize, block_bytes) => {
                 let cursor_str = crosscut::PointArg::from(point.clone()).to_string();
 
-                if *finalize {
+                if !!finalize {
                     self.connection
                         .as_mut()
                         .unwrap()
                         .set(stage.config.cursor_key(), &cursor_str)
                         .or_restart()?;
+
+                    stage
+                        .blocks
+                        .lock()
+                        .unwrap()
+                        .insert_block(&point, &block_bytes);
 
                     log::info!(
                         "new cursor saved to redis {} {}",

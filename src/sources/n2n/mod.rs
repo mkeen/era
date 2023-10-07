@@ -1,16 +1,11 @@
 pub mod chainsync;
-mod transport;
 
-use elasticsearch::Elasticsearch;
-use gasket::messaging::OutputPort;
+use std::sync::{Arc, Mutex};
 
 use pallas::network::miniprotocols::Point;
 use serde::Deserialize;
 
-use crate::{
-    bootstrap, crosscut, model,
-    storage::{self, Cursor},
-};
+use crate::{bootstrap, crosscut, storage::Cursor};
 
 #[derive(Clone, Debug)]
 pub enum ChainSyncInternalPayload {
@@ -39,7 +34,12 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(self, ctx: &bootstrap::Context, cursor: Cursor) -> chainsync::Stage {
+    pub fn bootstrapper(
+        self,
+        ctx: &bootstrap::Context,
+        cursor: Cursor,
+        blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
+    ) -> chainsync::Stage {
         chainsync::Stage {
             config: self,
             output: Default::default(),
@@ -48,7 +48,7 @@ impl Config {
             intersect: ctx.intersect.clone(),
             cursor,
             chain: ctx.chain.clone(),
-            blocks: ctx.blocks.clone().into(),
+            blocks,
             finalize: ctx.finalize.clone(),
         }
     }

@@ -87,7 +87,10 @@ impl TuiConsole {
                     for (key, value) in readings {
                         match (tether.name(), key, value) {
                             (_, "chain_tip", Reading::Gauge(x)) => {
-                                self.chainsync_progress.set_length(x as u64);
+                                // todo look into why this is flickering to 0 constantly without this check...dbg!()
+                                if x > 0 {
+                                    self.chainsync_progress.set_length(x as u64);
+                                }
                             }
                             (_, "last_block", Reading::Gauge(x)) => {
                                 self.chainsync_progress.set_position(x as u64);

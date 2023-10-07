@@ -15,7 +15,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(self) -> Stage {
+    pub fn bootstrapper(self, blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>) -> Stage {
         let cursor = Cursor {
             last_point: Arc::new(Mutex::new(None)),
         };
@@ -24,6 +24,7 @@ impl Config {
             config: self.clone(),
             input: Default::default(),
             cursor,
+            blocks,
             ops_count: Default::default(),
         }
     }
@@ -47,6 +48,7 @@ pub struct Worker {}
 pub struct Stage {
     config: Config,
     pub cursor: Cursor,
+    pub blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
 
     pub input: InputPort<CRDTCommand>,
 

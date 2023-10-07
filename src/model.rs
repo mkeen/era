@@ -149,7 +149,7 @@ pub enum CRDTCommand {
     HashSetMulti(Key, Vec<Member>, Vec<Value>),
     HashUnsetKey(Key, Member),
     UnsetKey(Key),
-    BlockFinished(Point, bool),
+    BlockFinished(Point, bool, Vec<u8>),
 }
 
 impl CRDTCommand {
@@ -314,7 +314,7 @@ impl CRDTCommand {
         CRDTCommand::HashCounter(key, member, delta)
     }
 
-    pub fn block_finished(point: Point, finalize: bool) -> CRDTCommand {
-        CRDTCommand::BlockFinished(point, finalize)
+    pub fn block_finished(point: Point, finalize: bool, block_bytes: Vec<u8>) -> CRDTCommand {
+        CRDTCommand::BlockFinished(point, finalize, block_bytes)
     }
 }

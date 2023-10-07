@@ -101,26 +101,23 @@ pub fn run(args: &Args) -> Result<(), era::Error> {
     let config = ConfigRoot::new(&args.config)
         .map_err(|err| era::Error::ConfigError(format!("{:?}", err)))?;
 
-    let block_config = config.blocks.unwrap_or_default();
-
     let chain = config.chain.unwrap_or_default().into();
     let policy = config.policy.unwrap_or_default().into();
-
-    let storage = config.storage.bootstrapper(&chain, &config.intersect);
 
     let ctx = bootstrap::Context {
         chain,
         intersect: config.intersect,
         finalize: config.finalize,
-        blocks: block_config.into(),
         error_policy: policy,
+        block: config.blocks.unwrap(),
     };
 
     let enrich = config.enrich.unwrap_or_default().bootstrapper(&ctx);
 
     let reducer = reducers::worker::bootstrap(&ctx, config.reducers);
 
-    let pipeline = bootstrap::Pipeline::bootstrap(&ctx, config.source, enrich, reducer, storage);
+    let pipeline =
+        bootstrap::Pipeline::bootstrap(&ctx, config.source, enrich, reducer, config.storage);
 
     while true {
         console::refresh(&args.console, &pipeline);

@@ -19,7 +19,7 @@ pub struct Worker {}
 impl Worker {
     async fn reduce_block<'b>(
         &mut self,
-        block: &'b Vec<u8>,
+        block_raw: &'b Vec<u8>,
         rollback: bool,
         ctx: &model::BlockContext,
         last_good_block_rollback_info: (Point, i64),
@@ -28,24 +28,24 @@ impl Worker {
         error_policy: &crosscut::policies::RuntimePolicy,
         reducers: &mut Vec<Reducer>,
     ) -> Option<i64> {
-        let block = MultiEraBlock::decode(block).unwrap();
+        let block_parsed = MultiEraBlock::decode(block_raw).unwrap();
 
         let (point, block_number) = match rollback {
             true => last_good_block_rollback_info,
             false => (
-                Point::Specific(block.slot(), block.hash().to_vec()),
-                block.number() as i64,
+                Point::Specific(block_parsed.slot(), block_parsed.hash().to_vec()),
+                block_parsed.number() as i64,
             ),
         };
 
         output
-            .send(model::CRDTCommand::block_starting(&block).into())
+            .send(model::CRDTCommand::block_starting(&block_parsed).into())
             .await
             .unwrap();
 
         for reducer in reducers {
             reducer
-                .reduce_block(&block, ctx, rollback, output, error_policy)
+                .reduce_block(&block_parsed, ctx, rollback, output, error_policy)
                 .await
                 .unwrap();
         }
@@ -55,6 +55,7 @@ impl Worker {
                 model::CRDTCommand::block_finished(
                     point,
                     !rollback || final_block_in_rollback_batch,
+                    block_raw.clone(),
                 )
                 .into(),
             )
