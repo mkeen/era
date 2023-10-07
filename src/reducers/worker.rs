@@ -44,6 +44,10 @@ impl Worker {
             .unwrap();
 
         for reducer in reducers {
+            if rollback {
+                log::warn!("rolling back {}", block_parsed.hash().to_string());
+            }
+
             reducer
                 .reduce_block(&block_parsed, ctx, rollback, output, error_policy)
                 .await

@@ -31,7 +31,7 @@ async fn intersect_from_config(
     peer: &mut PeerClient,
     intersect: &IntersectConfig,
     mut cursor: Cursor,
-) -> Result<Option<Point>, WorkerError> {
+) -> Result<(), WorkerError> {
     let chainsync = peer.chainsync();
 
     match cursor.last_point().unwrap() {
@@ -44,47 +44,41 @@ async fn intersect_from_config(
                 .map_err(crate::Error::ouroboros)
                 .unwrap();
         }
-        None => {
-            log::info!("no cursor found in storage plugin");
-        }
+        None => match &intersect {
+            crosscut::IntersectConfig::Origin => {
+                chainsync
+                    .intersect_origin()
+                    .await
+                    .map_err(crate::Error::ouroboros)
+                    .unwrap();
+            }
+            crosscut::IntersectConfig::Tip => {
+                chainsync
+                    .intersect_tip()
+                    .await
+                    .map_err(crate::Error::ouroboros)
+                    .unwrap();
+            }
+            crosscut::IntersectConfig::Point(_, _) => {
+                let point = intersect.get_point().expect("point value");
+                chainsync
+                    .find_intersect(vec![point])
+                    .await
+                    .map_err(crate::Error::ouroboros)
+                    .unwrap();
+            }
+            crosscut::IntersectConfig::Fallbacks(_) => {
+                let points = intersect.get_fallbacks().expect("fallback values");
+                chainsync
+                    .find_intersect(points)
+                    .await
+                    .map_err(crate::Error::ouroboros)
+                    .unwrap();
+            }
+        },
     };
 
-    match &intersect {
-        crosscut::IntersectConfig::Origin => {
-            let point = chainsync
-                .intersect_origin()
-                .await
-                .map_err(crate::Error::ouroboros)
-                .unwrap();
-            Ok(Some(point))
-        }
-        crosscut::IntersectConfig::Tip => {
-            let point = chainsync
-                .intersect_tip()
-                .await
-                .map_err(crate::Error::ouroboros)
-                .unwrap();
-            Ok(Some(point))
-        }
-        crosscut::IntersectConfig::Point(_, _) => {
-            let point = intersect.get_point().expect("point value");
-            let (point, _) = chainsync
-                .find_intersect(vec![point])
-                .await
-                .map_err(crate::Error::ouroboros)
-                .unwrap();
-            Ok(point)
-        }
-        crosscut::IntersectConfig::Fallbacks(_) => {
-            let points = intersect.get_fallbacks().expect("fallback values");
-            let (point, _) = chainsync
-                .find_intersect(points)
-                .await
-                .map_err(crate::Error::ouroboros)
-                .unwrap();
-            Ok(point)
-        }
-    }
+    Ok(())
 }
 
 pub struct Worker {
@@ -200,8 +194,6 @@ impl gasket::framework::Worker<Stage> for Worker {
             if let Some(rollback_cbor) = pop_rollback_block {
                 if let Some(last_good_block) = blocks.get_block_latest() {
                     if let Ok(parsed_last_good_block) = MultiEraBlock::decode(&last_good_block) {
-                        warn!("backward happening");
-
                         let point = Point::Specific(
                             parsed_last_good_block.slot(),
                             parsed_last_good_block.hash().to_vec(),
@@ -251,6 +243,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                 //     return Ok(()); // i think this is effectively a no-op that does nothing now... but this is designed to never shut down anyway... night fully remove should_finalize
                 // }
             }
+        } else {
+            log::warn!("skipping work");
         }
 
         Ok(())
