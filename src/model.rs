@@ -149,7 +149,7 @@ pub enum CRDTCommand {
     HashSetMulti(Key, Vec<Member>, Vec<Value>),
     HashUnsetKey(Key, Member),
     UnsetKey(Key),
-    BlockFinished(Point, bool, Vec<u8>),
+    BlockFinished(Point, bool, Vec<u8>, bool),
 }
 
 impl CRDTCommand {
@@ -158,6 +158,7 @@ impl CRDTCommand {
     }
 
     pub fn block_starting(block: &MultiEraBlock) -> CRDTCommand {
+        log::warn!("block starting");
         let hash = block.hash();
         let slot = block.slot();
         let point = Point::Specific(slot, hash.to_vec());
@@ -314,7 +315,13 @@ impl CRDTCommand {
         CRDTCommand::HashCounter(key, member, delta)
     }
 
-    pub fn block_finished(point: Point, finalize: bool, block_bytes: Vec<u8>) -> CRDTCommand {
-        CRDTCommand::BlockFinished(point, finalize, block_bytes)
+    pub fn block_finished(
+        point: Point,
+        finalize: bool,
+        block_bytes: Vec<u8>,
+        rollback_block: bool,
+    ) -> CRDTCommand {
+        log::warn!("block finished {} {}", rollback_block, finalize);
+        CRDTCommand::BlockFinished(point, finalize, block_bytes, rollback_block)
     }
 }

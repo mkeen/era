@@ -13,7 +13,7 @@ rollback_db_path = "/data/era/rollback_buffer"
 
 [storage]
 type = "Redis"
-connection_params = "redis://127.0.0.1:6379/3"
+connection_params = "redis://127.0.0.1:6379/4"
 cursor_key = "_cursor1"
 
 [[reducers]]

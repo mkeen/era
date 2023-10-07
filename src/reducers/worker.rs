@@ -43,11 +43,15 @@ impl Worker {
             .await
             .unwrap();
 
-        for reducer in reducers {
-            if rollback {
-                log::warn!("rolling back {}", block_parsed.hash().to_string());
-            }
+        if rollback {
+            log::warn!(
+                "rolling back {}@{}",
+                block_parsed.hash().to_string(),
+                block_parsed.slot()
+            );
+        }
 
+        for reducer in reducers {
             reducer
                 .reduce_block(&block_parsed, ctx, rollback, output, error_policy)
                 .await
@@ -60,6 +64,7 @@ impl Worker {
                     point,
                     !rollback || final_block_in_rollback_batch,
                     block_raw.clone(),
+                    rollback,
                 )
                 .into(),
             )

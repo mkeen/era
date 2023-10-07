@@ -204,10 +204,17 @@ impl gasket::framework::Worker<Stage> for Worker {
                             .send(model::RawBlockPayload::roll_back(
                                 rollback_cbor.clone(),
                                 (point, parsed_last_good_block.number() as i64),
-                                blocks.get_current_queue_depth() == 0,
+                                blocks.get_current_queue_depth() == 0
+                                    && !(self.chain_buffer.size() >= self.min_depth),
                             ))
                             .await
                             .unwrap();
+
+                        if blocks.get_current_queue_depth() == 0
+                            && !(self.chain_buffer.size() >= self.min_depth)
+                        {
+                            log::warn!("finalizing transaction from rollbacks")
+                        }
 
                         stage.block_count.inc(1);
                     }

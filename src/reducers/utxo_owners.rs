@@ -103,12 +103,15 @@ impl Reducer {
         output: &mut super::OutputPort<model::CRDTCommand>,
         error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
+        log::warn!("utxo owners {}", "wefwe");
+
         if rollback {
             return Ok(());
         }
 
         let prefix = self.config.prefix.as_deref();
         for tx in block.txs().into_iter() {
+            log::debug!("i see a tx {}", "d");
             for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
                 if let Ok(utxo) = ctx.find_utxo(&consumed) {
                     if let Some((key, value)) =
@@ -118,8 +121,7 @@ impl Reducer {
                             .send(
                                 model::CRDTCommand::set_remove(prefix, &key.as_str(), value).into(),
                             )
-                            .await
-                            .unwrap();
+                            .await?;
                     }
                 }
             }
@@ -129,8 +131,7 @@ impl Reducer {
                 if let Some((key, value)) = self.get_key_value(&produced, &tx, &output_ref) {
                     output
                         .send(model::CRDTCommand::set_add(prefix, &key, value).into())
-                        .await
-                        .unwrap();
+                        .await?;
                 }
             }
         }

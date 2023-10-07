@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use futures::Future;
 use gasket::messaging::tokio::{InputPort, OutputPort};
 use gasket::runtime::{spawn_stage, Tether};
 use pallas::ledger::traverse::MultiEraBlock;
@@ -70,7 +71,7 @@ impl Reducer {
         output: &mut OutputPort<CRDTCommand>,
         error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
-        match self {
+        Ok((match self {
             Reducer::UtxoOwners(x) => {
                 x.reduce_block(block, ctx, rollback, output, error_policy)
                     .await
@@ -93,6 +94,6 @@ impl Reducer {
                     .await
             }
             Reducer::StakeToPool(x) => x.reduce_block(block, rollback, output, error_policy).await,
-        }
+        })?)
     }
 }
