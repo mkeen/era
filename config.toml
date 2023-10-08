@@ -2,6 +2,10 @@
 type = "N2N"
 address = "127.0.0.1:3001"
 
+# [source]
+# type = "UTXORPC"
+# address = "https://64.176.196.20:50051"
+
 [enrich]
 type = "Sled"
 db_path = "/data/era/sled_db"

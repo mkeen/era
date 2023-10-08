@@ -59,8 +59,7 @@ impl Reducer {
 
                         for asset_list in txo.non_ada_assets() {
                             for asset in asset_list.assets() {
-                                asset_names
-                                    .push(std::str::from_utf8(asset.name()).unwrap().to_string())
+                                asset_names.push(hex::encode(asset.name()).to_string())
                             }
                         }
 
@@ -124,7 +123,7 @@ impl Reducer {
 
                     for asset_list in txo.non_ada_assets() {
                         for asset in asset_list.assets() {
-                            asset_names.push(std::str::from_utf8(asset.name()).unwrap().to_string())
+                            asset_names.push(hex::encode(asset.name()).to_string());
                         }
                     }
 

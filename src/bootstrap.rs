@@ -38,7 +38,7 @@ impl Pipeline {
         let mut storage = storage_config.bootstrapper(ctx.block.clone()).unwrap();
 
         let mut source = sources_config
-            .bootstrapper(&ctx, storage.build_cursor(), storage.borrow_blocks())
+            .bootstrapper(&ctx, storage.build_cursor(), Some(storage.borrow_blocks()))
             .unwrap();
 
         connect_ports(source.borrow_output_port(), enrich.borrow_input_port(), 100);

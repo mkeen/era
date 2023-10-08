@@ -119,7 +119,7 @@ pub fn run(args: &Args) -> Result<(), era::Error> {
     let pipeline =
         bootstrap::Pipeline::bootstrap(&ctx, config.source, enrich, reducer, config.storage);
 
-    while true {
+    while !should_stop(&pipeline) {
         console::refresh(&args.console, &pipeline);
         std::thread::sleep(Duration::from_millis(250));
     }

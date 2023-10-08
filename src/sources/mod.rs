@@ -12,13 +12,13 @@ use serde::Deserialize;
 
 pub mod n2n;
 pub mod utils;
+pub mod utxorpc;
 
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 pub enum Config {
     N2N(n2n::Config),
-    // #[cfg(target_family = "unix")]
-    // N2C(n2c::Config),
+    UTXORPC(utxorpc::Config),
 }
 
 impl Config {
@@ -26,34 +26,43 @@ impl Config {
         self,
         ctx: &bootstrap::Context,
         cursor: Cursor,
-        blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
+        blocks: Option<Arc<Mutex<crosscut::historic::BufferBlocks>>>,
     ) -> Option<Bootstrapper> {
         match self {
-            Config::N2N(c) => Some(Bootstrapper::N2N(c.bootstrapper(ctx, cursor, blocks))),
+            Config::N2N(c) => Some(Bootstrapper::N2N(c.bootstrapper(
+                ctx,
+                cursor,
+                blocks.unwrap(),
+            ))),
+            Config::UTXORPC(c) => Some(Bootstrapper::UTXORPC(c.bootstrapper(ctx, cursor))),
         }
     }
 }
 
 pub enum Bootstrapper {
     N2N(n2n::chainsync::Stage),
+    UTXORPC(utxorpc::Stage),
 }
 
 impl Bootstrapper {
     pub fn borrow_output_port(&mut self) -> &'_ mut OutputPort<model::RawBlockPayload> {
         match self {
             Bootstrapper::N2N(s) => &mut s.output,
+            Bootstrapper::UTXORPC(s) => &mut s.output,
         }
     }
 
-    pub fn borrow_blocks(mut self) -> Arc<Mutex<crosscut::historic::BufferBlocks>> {
+    pub fn borrow_blocks(mut self) -> Option<Arc<Mutex<crosscut::historic::BufferBlocks>>> {
         match self {
-            Bootstrapper::N2N(s) => s.blocks,
+            Bootstrapper::N2N(s) => Some(s.blocks),
+            Bootstrapper::UTXORPC(s) => None,
         }
     }
 
     pub fn spawn_stage(mut self, pipeline: &bootstrap::Pipeline) -> Tether {
         match self {
             Bootstrapper::N2N(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),
+            Bootstrapper::UTXORPC(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),
         }
     }
 }

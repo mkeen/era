@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
-use config::builder::DefaultState;
-use log::*;
+use gasket::messaging::tokio::OutputPort;
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraHeader};
 use pallas::network::facades::PeerClient;
+use pallas::network::miniprotocols::blockfetch::Range;
 use pallas::network::miniprotocols::chainsync::{HeaderContent, NextResponse, RollbackBuffer};
 use pallas::network::miniprotocols::{chainsync, Point};
 
@@ -24,8 +24,6 @@ fn to_traverse<'b>(header: &'b HeaderContent) -> Result<MultiEraHeader<'b>, Erro
     )
     .map_err(Error::cbor)
 }
-
-pub type OutputPort = gasket::messaging::tokio::OutputPort<RawBlockPayload>;
 
 async fn intersect_from_config(
     peer: &mut PeerClient,
@@ -92,7 +90,6 @@ impl Worker {
         let header = to_traverse(&content).unwrap();
         let point = Point::Specific(header.slot(), header.hash().to_vec());
         // track the new point in our memory buffer
-        log::warn!("queueing point for processing {:?}", point);
         self.chain_buffer.roll_forward(point);
 
         Ok(())
@@ -101,7 +98,7 @@ impl Worker {
 
 #[derive(Stage)]
 #[stage(
-    name = "n2n-chainsync",
+    name = "sources-n2n",
     unit = "NextResponse<HeaderContent>",
     worker = "Worker"
 )]
@@ -113,7 +110,7 @@ pub struct Stage {
     pub blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
     pub finalize: Option<crosscut::FinalizeConfig>,
 
-    pub output: OutputPort,
+    pub output: OutputPort<RawBlockPayload>,
 
     #[metric]
     pub chain_tip: gasket::metrics::Gauge,
@@ -165,29 +162,6 @@ impl gasket::framework::Worker<Stage> for Worker {
     ) -> Result<(), WorkerError> {
         let mut blocks = stage.blocks.lock().unwrap();
 
-        match unit {
-            NextResponse::RollForward(h, t) => {
-                self.on_roll_forward(&h).unwrap();
-                stage.chain_tip.set(t.1 as i64);
-            }
-            NextResponse::RollBackward(p, t) => {
-                match self.chain_buffer.roll_back(&p) {
-                    chainsync::RollbackEffect::Handled => {
-                        log::warn!("handled rollback within buffer for point {:?}", p);
-                    }
-                    chainsync::RollbackEffect::OutOfScope => {
-                        log::warn!("rolling backward away from point {:?}", p);
-
-                        blocks.enqueue_rollback_batch(&p);
-                    }
-                }
-                stage.chain_tip.set(t.1 as i64);
-            }
-            NextResponse::Await => {
-                log::info!("chain-sync reached the tip of the chain");
-            }
-        }
-
         loop {
             let pop_rollback_block = blocks.rollback_pop();
 
@@ -208,12 +182,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                             .await
                             .unwrap();
 
-                        if blocks.get_current_queue_depth() == 0
-                            && !(self.chain_buffer.size() >= self.min_depth)
-                        {
-                            log::warn!("finalizing transaction from rollbacks")
-                        }
-
                         stage.block_count.inc(1);
                     }
                 }
@@ -222,34 +190,60 @@ impl gasket::framework::Worker<Stage> for Worker {
             }
         }
 
+        match unit {
+            NextResponse::RollForward(h, t) => {
+                self.on_roll_forward(&h).unwrap();
+                stage.chain_tip.set(t.1 as i64);
+            }
+            NextResponse::RollBackward(p, t) => {
+                match self.chain_buffer.roll_back(&p) {
+                    chainsync::RollbackEffect::Handled => {
+                        log::warn!("rolled back before side effects {:?}", p);
+                    }
+                    chainsync::RollbackEffect::OutOfScope => {
+                        log::warn!("preparing to undo side effects for {:?}", p);
+
+                        blocks.enqueue_rollback_batch(&p);
+                    }
+                }
+                stage.chain_tip.set(t.1 as i64);
+            }
+            NextResponse::Await => {
+                log::info!("chain-sync reached the tip of the chain");
+            }
+        }
+
         // see if we have points that already reached certain depth
         if self.chain_buffer.size() >= self.min_depth {
             let ready = self.chain_buffer.pop_with_depth(self.min_depth);
 
-            for point in ready {
-                let block = self
+            if ready.len() > 0 {
+                let range = (
+                    ready.first().unwrap().clone(),
+                    ready.last().unwrap().clone(),
+                );
+
+                let blocks = self
                     .peer
                     .blockfetch()
-                    .fetch_single(point.clone())
+                    .fetch_range(Range::from(range.clone()))
                     .await
-                    .or_restart()?;
-
-                stage.block_count.inc(1);
-
-                stage
-                    .output
-                    .send(model::RawBlockPayload::roll_forward(block))
-                    .await
+                    .or_retry()
                     .unwrap();
 
-                // evaluate if we should finalize the thread according to config
+                for block in blocks {
+                    stage.block_count.inc(1);
 
-                // if crosscut::should_finalize(&Some(stage.config.finalize.clone()), &point) {
-                //     return Ok(()); // i think this is effectively a no-op that does nothing now... but this is designed to never shut down anyway... night fully remove should_finalize
-                // }
+                    stage
+                        .output
+                        .send(model::RawBlockPayload::roll_forward(block))
+                        .await
+                        .or_retry()
+                        .unwrap()
+                }
             }
         } else {
-            log::warn!("skipping work");
+            log::debug!("skipping work");
         }
 
         Ok(())

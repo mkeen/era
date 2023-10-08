@@ -46,10 +46,10 @@ impl Config {
             chain_tip: Default::default(),
             block_count: Default::default(),
             intersect: ctx.intersect.clone(),
-            cursor,
             chain: ctx.chain.clone(),
-            blocks,
             finalize: ctx.finalize.clone(),
+            cursor,
+            blocks,
         }
     }
 }

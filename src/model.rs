@@ -157,7 +157,7 @@ impl CRDTCommand {
     }
 
     pub fn block_starting(block: &MultiEraBlock) -> CRDTCommand {
-        log::warn!("block starting");
+        log::debug!("block starting");
         let hash = block.hash();
         let slot = block.slot();
         let point = Point::Specific(slot, hash.to_vec());
@@ -315,7 +315,7 @@ impl CRDTCommand {
     }
 
     pub fn block_finished(point: Point, block_bytes: Vec<u8>, rollback: bool) -> CRDTCommand {
-        log::warn!("block finished {:?}", point);
+        log::debug!("block finished {:?}", point);
         CRDTCommand::BlockFinished(point, block_bytes, rollback)
     }
 }

@@ -83,7 +83,6 @@ impl BufferBlocks {
         let mut last_seen_slot_key = key.clone();
 
         while let Some((next_key, next_block)) = db.get_gt(last_seen_slot_key.as_bytes()).unwrap() {
-            log::warn!("big bacon {}", "mike");
             last_seen_slot_key = String::from_utf8(next_key.to_vec()).unwrap();
             blocks_to_roll_back.push((last_seen_slot_key.clone(), next_block.to_vec()));
         }

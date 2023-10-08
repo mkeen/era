@@ -23,7 +23,6 @@ impl Reducer {
         output: &mut OutputPort<model::CRDTCommand>,
         error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
-        log::warn!("hi from the params reducer");
         if rollback {
             return Ok(());
         }
