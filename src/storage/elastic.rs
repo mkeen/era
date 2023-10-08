@@ -74,7 +74,7 @@ async fn recv_batch(input: &mut InputPort<CRDTCommand>) -> Result<Batch, gasket:
         match input.recv().await {
             Ok(x) => match x.payload {
                 CRDTCommand::BlockStarting(_) => (),
-                CRDTCommand::BlockFinished(_, _, _, _) => {
+                CRDTCommand::BlockFinished(_, _, _) => {
                     batch.block_end = Some(x.payload);
                     return Ok(batch);
                 }
@@ -102,7 +102,7 @@ async fn apply_command(cmd: CRDTCommand, client: &Elasticsearch) -> Option<ESRes
             .send()
             .await
             .into(),
-        CRDTCommand::BlockFinished(_, _, _, _) => {
+        CRDTCommand::BlockFinished(_, _, _) => {
             log::warn!("Elasticsearch storage doesn't support cursors ATM");
             None
         }

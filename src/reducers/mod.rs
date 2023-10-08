@@ -1,14 +1,10 @@
-use std::time::Duration;
-
-use futures::Future;
-use gasket::messaging::tokio::{InputPort, OutputPort};
-use gasket::runtime::{spawn_stage, Tether};
+use gasket::messaging::tokio::OutputPort;
 use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
 
 use crate::bootstrap::Context;
-use crate::model::{CRDTCommand, EnrichedBlockPayload};
-use crate::{bootstrap, crosscut, model};
+use crate::model::CRDTCommand;
+use crate::{crosscut, model};
 
 pub mod macros;
 
@@ -71,29 +67,38 @@ impl Reducer {
         output: &mut OutputPort<CRDTCommand>,
         error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
-        Ok((match self {
+        let result = match self {
             Reducer::UtxoOwners(x) => {
                 x.reduce_block(block, ctx, rollback, output, error_policy)
-                    .await
+                    .await?
             }
             Reducer::UtxoByAddress(x) => {
                 x.reduce_block(block, ctx, rollback, output, error_policy)
-                    .await
+                    .await?
             }
-            Reducer::Parameters(x) => x.reduce_block(block, rollback, output, error_policy).await,
+            Reducer::Parameters(x) => {
+                x.reduce_block(block, rollback, output, error_policy)
+                    .await?
+            }
             Reducer::AssetMetadata(x) => {
-                x.reduce_block(block, rollback, output, error_policy).await
+                x.reduce_block(block, rollback, output, error_policy)
+                    .await?
             }
-            Reducer::PolicyAssetsMoved(x) => x.reduce_block(block, output, error_policy).await,
+            Reducer::PolicyAssetsMoved(x) => x.reduce_block(block, output, error_policy).await?,
             Reducer::MultiAssetBalances(x) => {
                 x.reduce_block(block, ctx, rollback, output, error_policy)
-                    .await
+                    .await?
             }
             Reducer::AdaHandle(x) => {
                 x.reduce_block(block, ctx, rollback, output, error_policy)
-                    .await
+                    .await?
             }
-            Reducer::StakeToPool(x) => x.reduce_block(block, rollback, output, error_policy).await,
-        })?)
+            Reducer::StakeToPool(x) => {
+                x.reduce_block(block, rollback, output, error_policy)
+                    .await?
+            }
+        };
+
+        Ok(result)
     }
 }

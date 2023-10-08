@@ -280,14 +280,16 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                 self.connection.as_mut().unwrap().del(key).or_restart()?;
             }
-            model::CRDTCommand::BlockFinished(point, finalize, block_bytes, rollback) => {
+            model::CRDTCommand::BlockFinished(point, block_bytes, rollback) => {
                 let cursor_str = crosscut::PointArg::from(point.clone()).to_string();
 
-                self.connection
-                    .as_mut()
-                    .unwrap()
-                    .set(stage.config.cursor_key(), &cursor_str)
-                    .or_restart()?;
+                if !rollback {
+                    self.connection
+                        .as_mut()
+                        .unwrap()
+                        .set(stage.config.cursor_key(), &cursor_str)
+                        .or_restart()?;
+                }
 
                 log::info!(
                     "new cursor saved to redis {} {}",

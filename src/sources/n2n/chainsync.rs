@@ -203,9 +203,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                             .output
                             .send(model::RawBlockPayload::roll_back(
                                 rollback_cbor.clone(),
-                                (point, parsed_last_good_block.number() as i64),
-                                blocks.get_current_queue_depth() == 0
-                                    && !(self.chain_buffer.size() >= self.min_depth),
+                                (point, parsed_last_good_block.number()),
                             ))
                             .await
                             .unwrap();

@@ -1,10 +1,7 @@
 use gasket::framework::*;
 use std::time::Duration;
 
-use gasket::{
-    messaging::tokio::{InputPort, OutputPort},
-    runtime::spawn_stage,
-};
+use gasket::messaging::tokio::{InputPort, OutputPort};
 
 use pallas::{
     codec::minicbor,
@@ -142,9 +139,11 @@ impl Worker {
     fn par_fetch_referenced_utxos(
         &self,
         db: &sled::Db,
+        block_number: u64,
         txs: &[MultiEraTx],
     ) -> Result<BlockContext, crate::Error> {
         let mut ctx = BlockContext::default();
+        ctx.block_number = block_number.clone();
 
         let required: Vec<_> = txs
             .iter()
@@ -305,7 +304,9 @@ impl gasket::framework::Worker<Stage> for Worker {
                     let txs = &block.txs();
 
                     self.insert_produced_utxos(db, txs).or_panic()?;
-                    let ctx = self.par_fetch_referenced_utxos(db, &txs).or_panic()?;
+                    let ctx = self
+                        .par_fetch_referenced_utxos(db, block.number(), &txs)
+                        .or_panic()?;
 
                     // and finally we remove utxos consumed by the block
                     self.remove_consumed_utxos(db, consumed_ring, &txs)
@@ -320,7 +321,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                         .or_panic()
                 }
 
-                model::RawBlockPayload::RollBack(cbor, last_known_block_info, finalize) => {
+                model::RawBlockPayload::RollBack(cbor, (last_known_point, last_known_number)) => {
                     let block = MultiEraBlock::decode(&cbor);
 
                     if let Ok(block) = block {
@@ -332,15 +333,16 @@ impl gasket::framework::Worker<Stage> for Worker {
                         self.replace_consumed_utxos(db, consumed_ring, &txs)
                             .expect("todo: panic error");
 
-                        let ctx = self.par_fetch_referenced_utxos(db, &txs).or_restart()?;
+                        let ctx = self
+                            .par_fetch_referenced_utxos(db, last_known_number.clone(), &txs)
+                            .or_restart()?;
 
                         return stage
                             .output
                             .send(model::EnrichedBlockPayload::roll_back(
                                 cbor.clone(),
                                 ctx,
-                                last_known_block_info.clone(),
-                                finalize.clone(),
+                                (last_known_point.clone(), last_known_number.clone()),
                             ))
                             .await
                             .or_panic();

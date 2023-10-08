@@ -32,8 +32,18 @@ pub struct BufferBlocks {
     queue: Vec<(String, Vec<u8>)>,
 }
 
-fn to_zero_padded_string(n: u64) -> String {
-    return format!("{:0>width$}", n, width = 15);
+fn to_zero_padded_string(point: &Point) -> String {
+    let block_identifier = match point.clone() {
+        Point::Origin => String::from("ORIGIN"),
+        Point::Specific(_, block_hash) => String::from(hex::encode(block_hash)),
+    };
+
+    return format!(
+        "{:0>width$}{}",
+        point.slot_or_default(),
+        block_identifier,
+        width = 15
+    );
 }
 
 impl BufferBlocks {
@@ -48,8 +58,49 @@ impl BufferBlocks {
         }
     }
 
+    fn get_db_ref(&self) -> &sled::Db {
+        self.db.as_ref().unwrap()
+    }
+
+    fn get_rollback_range(&mut self, from: &Point) -> Vec<(String, Vec<u8>)> {
+        let mut blocks_to_roll_back: Vec<(String, Vec<u8>)> = vec![];
+
+        let db = self.get_db_ref();
+
+        let key = to_zero_padded_string(from);
+
+        let current_block = match db.get(key.as_bytes()).unwrap() {
+            None => vec![],
+            Some(value) => value.to_vec(),
+        };
+
+        if !current_block.is_empty() {
+            blocks_to_roll_back.push((key.clone(), current_block.to_vec()));
+        }
+
+        //let mut clear_blocks = sled::Batch::default();
+
+        let mut last_seen_slot_key = key.clone();
+
+        while let Some((next_key, next_block)) = db.get_gt(last_seen_slot_key.as_bytes()).unwrap() {
+            log::warn!("big bacon {}", "mike");
+            last_seen_slot_key = String::from_utf8(next_key.to_vec()).unwrap();
+            blocks_to_roll_back.push((last_seen_slot_key.clone(), next_block.to_vec()));
+        }
+
+        if !blocks_to_roll_back.is_empty() {
+            self.queue = blocks_to_roll_back;
+        }
+
+        self.queue.clone()
+    }
+
+    pub fn close(self) {
+        self.get_db_ref().flush().unwrap_or_default();
+    }
+
     pub fn insert_block(&mut self, point: &Point, block: &Vec<u8>) {
-        let key = to_zero_padded_string(point.slot_or_default());
+        let key = to_zero_padded_string(point);
         log::debug!("my key was {}", key);
         let db = self.get_db_ref();
         db.insert(key.as_bytes(), sled::IVec::from(block.clone()))
@@ -57,7 +108,7 @@ impl BufferBlocks {
     }
 
     pub fn get_block_at_point(&self, point: &Point) -> Option<Vec<u8>> {
-        let key = to_zero_padded_string(point.slot_or_default());
+        let key = to_zero_padded_string(point);
 
         match self.get_db_ref().get(key.as_bytes()) {
             Ok(block) => match block {
@@ -76,10 +127,6 @@ impl BufferBlocks {
             },
             Err(_) => None,
         }
-    }
-
-    pub fn close(&self) {
-        self.get_db_ref().flush().unwrap_or_default();
     }
 
     pub fn enqueue_rollback_batch(&mut self, from: &Point) -> usize {
@@ -101,44 +148,5 @@ impl BufferBlocks {
 
     pub fn get_current_queue_depth(&mut self) -> usize {
         self.queue.len()
-    }
-
-    fn get_db_ref(&self) -> &sled::Db {
-        self.db.as_ref().unwrap()
-    }
-
-    fn get_rollback_range(&mut self, from: &Point) -> Vec<(String, Vec<u8>)> {
-        let mut blocks_to_roll_back: Vec<(String, Vec<u8>)> = vec![];
-
-        let db = self.get_db_ref();
-
-        let slot = from.slot_or_default();
-
-        let key = format!("{:x}", slot);
-
-        let current_block = match db.get(key.as_bytes()).unwrap() {
-            None => vec![],
-            Some(value) => value.to_vec(),
-        };
-
-        if !current_block.is_empty() {
-            blocks_to_roll_back.push((key.clone(), current_block.to_vec()));
-        }
-
-        //let mut clear_blocks = sled::Batch::default();
-
-        let mut last_seen_slot_key = key.clone();
-
-        while let Some((next_key, next_block)) = db.get_gt(last_seen_slot_key.as_bytes()).unwrap() {
-            log::debug!("big bacon {}", "mike");
-            last_seen_slot_key = String::from_utf8(next_key.to_vec()).unwrap();
-            blocks_to_roll_back.push((last_seen_slot_key.clone(), next_block.to_vec()));
-        }
-
-        if !blocks_to_roll_back.is_empty() {
-            self.queue = blocks_to_roll_back;
-        }
-
-        self.queue.clone()
     }
 }

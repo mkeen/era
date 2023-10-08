@@ -22,20 +22,27 @@ impl Worker {
         block_raw: &'b Vec<u8>,
         rollback: bool,
         ctx: &model::BlockContext,
-        last_good_block_rollback_info: (Point, i64),
-        final_block_in_rollback_batch: bool,
+        last_good_block_rollback_info: Option<(Point, u64)>,
         output: &mut OutputPort<CRDTCommand>,
         error_policy: &crosscut::policies::RuntimePolicy,
         reducers: &mut Vec<Reducer>,
-    ) -> Option<i64> {
+    ) -> Option<u64> {
         let block_parsed = MultiEraBlock::decode(block_raw).unwrap();
 
-        let (point, block_number) = match rollback {
-            true => last_good_block_rollback_info,
-            false => (
-                Point::Specific(block_parsed.slot(), block_parsed.hash().to_vec()),
-                block_parsed.number() as i64,
-            ),
+        let point = match rollback {
+            true => {
+                let (last_point, _) = last_good_block_rollback_info.clone().unwrap();
+                last_point
+            }
+            false => Point::Specific(block_parsed.slot(), block_parsed.hash().to_vec()),
+        };
+
+        let number = match rollback {
+            true => {
+                let (_, last_number) = last_good_block_rollback_info.unwrap();
+                last_number
+            }
+            false => block_parsed.number(),
         };
 
         output
@@ -59,19 +66,11 @@ impl Worker {
         }
 
         output
-            .send(
-                model::CRDTCommand::block_finished(
-                    point,
-                    !rollback || final_block_in_rollback_batch,
-                    block_raw.clone(),
-                    rollback,
-                )
-                .into(),
-            )
+            .send(model::CRDTCommand::block_finished(point, block_raw.clone(), rollback).into())
             .await
             .unwrap();
 
-        Some(block_number)
+        Some(number)
     }
 }
 
@@ -143,35 +142,28 @@ impl gasket::framework::Worker<Stage> for Worker {
                         &block,
                         false,
                         &ctx,
-                        (Point::Origin, 0),
-                        false,
+                        None,
                         &mut stage.output,
                         &stage.error_policy,
                         &mut stage.reducers,
                     )
                     .await
-                    .unwrap(),
+                    .unwrap() as i64,
                 );
             }
-            model::EnrichedBlockPayload::RollBack(
-                block,
-                ctx,
-                last_block_rollback_info,
-                final_block_in_batch,
-            ) => {
+            model::EnrichedBlockPayload::RollBack(block, ctx, last_block_rollback_info) => {
                 stage.last_block.set(
                     self.reduce_block(
                         &block,
                         true,
                         &ctx,
-                        last_block_rollback_info.clone(),
-                        final_block_in_batch.clone(),
+                        Some(last_block_rollback_info.clone()),
                         &mut stage.output,
                         &stage.error_policy,
                         &mut stage.reducers,
                     )
                     .await
-                    .unwrap(),
+                    .unwrap() as i64,
                 );
             }
         }

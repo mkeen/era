@@ -10,7 +10,7 @@ use crate::prelude::*;
 #[derive(Debug, Clone)]
 pub enum RawBlockPayload {
     RollForward(Vec<u8>),
-    RollBack(Vec<u8>, (Point, i64), bool),
+    RollBack(Vec<u8>, (Point, u64)),
 }
 
 impl RawBlockPayload {
@@ -22,11 +22,10 @@ impl RawBlockPayload {
 
     pub fn roll_back(
         block: Vec<u8>,
-        last_good_block_info: (Point, i64),
-        finalize: bool,
+        last_good_block_info: (Point, u64),
     ) -> gasket::messaging::Message<Self> {
         gasket::messaging::Message {
-            payload: Self::RollBack(block, last_good_block_info, finalize),
+            payload: Self::RollBack(block, last_good_block_info),
         }
     }
 }
@@ -34,6 +33,7 @@ impl RawBlockPayload {
 #[derive(Default, Debug, Clone)]
 pub struct BlockContext {
     utxos: HashMap<String, (Era, Vec<u8>)>,
+    pub block_number: u64,
 }
 
 impl BlockContext {
@@ -75,7 +75,7 @@ impl BlockContext {
 #[derive(Debug, Clone)]
 pub enum EnrichedBlockPayload {
     RollForward(Vec<u8>, BlockContext),
-    RollBack(Vec<u8>, BlockContext, (Point, i64), bool),
+    RollBack(Vec<u8>, BlockContext, (Point, u64)),
 }
 
 impl EnrichedBlockPayload {
@@ -88,11 +88,10 @@ impl EnrichedBlockPayload {
     pub fn roll_back(
         block: Vec<u8>,
         ctx: BlockContext,
-        last_good_block_info: (Point, i64),
-        final_block_in_batch: bool,
+        last_good_block_info: (Point, u64),
     ) -> gasket::messaging::Message<Self> {
         gasket::messaging::Message {
-            payload: Self::RollBack(block, ctx, last_good_block_info, final_block_in_batch),
+            payload: Self::RollBack(block, ctx, last_good_block_info),
         }
     }
 }
@@ -149,7 +148,7 @@ pub enum CRDTCommand {
     HashSetMulti(Key, Vec<Member>, Vec<Value>),
     HashUnsetKey(Key, Member),
     UnsetKey(Key),
-    BlockFinished(Point, bool, Vec<u8>, bool),
+    BlockFinished(Point, Vec<u8>, bool),
 }
 
 impl CRDTCommand {
@@ -315,13 +314,8 @@ impl CRDTCommand {
         CRDTCommand::HashCounter(key, member, delta)
     }
 
-    pub fn block_finished(
-        point: Point,
-        finalize: bool,
-        block_bytes: Vec<u8>,
-        rollback_block: bool,
-    ) -> CRDTCommand {
-        log::warn!("block finished {} {}", rollback_block, finalize);
-        CRDTCommand::BlockFinished(point, finalize, block_bytes, rollback_block)
+    pub fn block_finished(point: Point, block_bytes: Vec<u8>, rollback: bool) -> CRDTCommand {
+        log::warn!("block finished {:?}", point);
+        CRDTCommand::BlockFinished(point, block_bytes, rollback)
     }
 }

@@ -25,7 +25,7 @@ impl Pipeline {
     ) -> Self {
         let mut pipe = Self {
             policy: Policy {
-                tick_timeout: Some(Duration::from_secs(10)),
+                tick_timeout: Some(Duration::from_secs(3)),
                 bootstrap_retry: retries::Policy::default(),
                 work_retry: retries::Policy::default(),
                 teardown_retry: retries::Policy::default(),
