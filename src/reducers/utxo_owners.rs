@@ -1,8 +1,10 @@
 use pallas::codec::utils::CborWrap;
 use pallas::crypto::hash::Hash;
-use pallas::ledger::primitives::babbage::{DatumOption, PlutusData};
+use pallas::ledger::primitives::babbage::{
+    DatumOption, PlutusData, PseudoDatumOption, TransactionOutput,
+};
 use pallas::ledger::primitives::Fragment;
-use pallas::ledger::traverse::{MultiEraAsset, MultiEraBlock, MultiEraTx};
+use pallas::ledger::traverse::{MultiEraAsset, MultiEraBlock, MultiEraTx, OutputRef};
 use pallas::ledger::traverse::{MultiEraOutput, OriginalHash};
 use serde::Deserialize;
 use serde_json::json;
@@ -10,9 +12,10 @@ use serde_json::json;
 use crate::model::EnrichedBlockPayload;
 use crate::{crosscut, model, prelude::*};
 
+use super::utils::AssetFingerprint;
+
 #[derive(Deserialize)]
 pub struct Config {
-    pub filter: Vec<String>,
     pub prefix: Option<String>,
     pub address_as_key: Option<bool>,
 }
@@ -21,21 +24,21 @@ pub struct Reducer {
     config: Config,
 }
 
-// pub fn resolve_datum(utxo: &MultiEraOutput, tx: &MultiEraTx) -> Result<PlutusData, ()> {
-//     match utxo.datum() {
-//         Some(DatumOption::Data(CborWrap(pd))) => Ok(pd),
-//         Some(DatumOption::Hash(datum_hash)) => {
-//             for raw_datum in tx.clone().plutus_data() {
-//                 if raw_datum.original_hash().eq(&datum_hash) {
-//                     return Ok(raw_datum.clone().unwrap());
-//                 }
-//             }
+pub fn resolve_datum(utxo: &MultiEraOutput, tx: &MultiEraTx) -> Result<PlutusData, ()> {
+    match utxo.datum() {
+        Some(PseudoDatumOption::Data(CborWrap(pd))) => Ok(pd.unwrap()),
+        Some(PseudoDatumOption::Hash(datum_hash)) => {
+            for raw_datum in tx.clone().plutus_data() {
+                if raw_datum.original_hash().eq(&datum_hash) {
+                    return Ok(raw_datum.clone().unwrap());
+                }
+            }
 
-//             return Err(());
-//         }
-//         _ => Err(()),
-//     }
-// }
+            return Err(());
+        }
+        _ => Err(()),
+    }
+}
 
 impl Reducer {
     fn get_key_value(
@@ -45,51 +48,53 @@ impl Reducer {
         output_ref: &(Hash<32>, u64),
     ) -> Option<(String, String)> {
         if let Some(address) = utxo.address().map(|addr| addr.to_string()).ok() {
-            if self.config.filter.iter().any(|addr| address.eq(addr)) {
-                let mut data = serde_json::Value::Object(serde_json::Map::new());
-                let address_as_key = self.config.address_as_key.unwrap_or(false);
-                let key: String;
+            let mut data = serde_json::Value::Object(serde_json::Map::new());
+            let address_as_key = self.config.address_as_key.unwrap_or(false);
+            let key: String;
 
-                if address_as_key {
-                    key = address;
-                    data["tx_hash"] = serde_json::Value::String(hex::encode(output_ref.0.to_vec()));
-                    data["output_index"] =
-                        serde_json::Value::from(serde_json::Number::from(output_ref.1));
-                } else {
-                    key = format!("{}#{}", hex::encode(output_ref.0.to_vec()), output_ref.1);
-                    data["address"] = serde_json::Value::String(address);
-                }
-
-                // if let Some(datum) = resolve_datum(utxo, tx).ok() {
-                //     data["datum"] = serde_json::Value::String(hex::encode(
-                //         datum.encode_fragment().ok().unwrap(),
-                //     ));
-                // } else if let Some(DatumOption::Hash(h)) = utxo.datum() {
-                //     data["datum_hash"] = serde_json::Value::String(hex::encode(h.to_vec()));
-                // }
-
-                let mut assets: Vec<serde_json::Value> = Vec::new();
-                // for asset in utxo.non_ada_assets() {
-                //     match asset {
-                //         MultiEraAsset::Ada(lovelace_amt) => {
-                //             assets.push(json!({
-                //                 "unit": "lovelace",
-                //                 "quantity": format!("{}", lovelace_amt)
-                //             }));
-                //         }
-                //         MultiEraAsset::NativeAsset(cs, tkn, amt) => {
-                //             let unit = format!("{}{}", hex::encode(cs.to_vec()), hex::encode(tkn));
-                //             assets.push(json!({
-                //                 "unit": unit,
-                //                 "quantity": format!("{}", amt)
-                //             }));
-                //         }
-                //     }
-                // }
-
-                data["amount"] = serde_json::Value::Array(assets);
-                return Some((key, data.to_string()));
+            if address_as_key {
+                key = address;
+                data["tx_hash"] = serde_json::Value::String(hex::encode(output_ref.0.to_vec()));
+                data["output_index"] =
+                    serde_json::Value::from(serde_json::Number::from(output_ref.1));
+            } else {
+                key = format!("{}#{}", hex::encode(output_ref.0.to_vec()), output_ref.1); // of course this would end up being an incomprehensable string of bytes
+                data["address"] = serde_json::Value::String(address);
             }
+
+            if let Some(datum) = resolve_datum(utxo, tx).ok() {
+                data["datum"] =
+                    serde_json::Value::String(hex::encode(datum.encode_fragment().ok().unwrap()));
+            } else if let Some(PseudoDatumOption::Hash(h)) = utxo.datum() {
+                data["datum_hash"] = serde_json::Value::String(hex::encode(h.to_vec()));
+            }
+
+            let mut assets: Vec<serde_json::Value> = Vec::new();
+
+            assets.push(json!({
+                "unit": "lovelace",
+                "quantity": format!("{}", utxo.lovelace_amount())
+            }));
+
+            for policy_group in utxo.non_ada_assets() {
+                for asset in policy_group.assets() {
+                    let fingerprint = AssetFingerprint::from_parts(
+                        &hex::encode(asset.policy()),
+                        &hex::encode(asset.name()),
+                    )
+                    .unwrap()
+                    .fingerprint()
+                    .unwrap();
+
+                    assets.push(json!({
+                        "unit": fingerprint,
+                        "quantity": format!("{}", asset.output_coin().unwrap())
+                    }));
+                }
+            }
+
+            data["amount"] = serde_json::Value::Array(assets);
+            return Some((key, data.to_string()));
         }
 
         None
@@ -103,25 +108,29 @@ impl Reducer {
         output: &mut super::OutputPort<model::CRDTCommand>,
         error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
-        log::warn!("utxo owners {}", "wefwe");
-
         if rollback {
             return Ok(());
         }
 
         let prefix = self.config.prefix.as_deref();
-        for tx in block.txs().into_iter() {
+
+        for tx in block.txs() {
             log::debug!("i see a tx {}", "d");
-            for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
-                if let Ok(utxo) = ctx.find_utxo(&consumed) {
-                    if let Some((key, value)) =
-                        self.get_key_value(&utxo, &tx, &(consumed.hash().clone(), consumed.index()))
-                    {
+            for consumed in tx.consumes() {
+                let output_ref = consumed.output_ref();
+
+                if let Ok(utxo) = ctx.find_utxo(&output_ref) {
+                    if let Some((key, value)) = self.get_key_value(
+                        &utxo,
+                        &tx,
+                        &(output_ref.hash().clone(), output_ref.index().clone()),
+                    ) {
                         output
                             .send(
                                 model::CRDTCommand::set_remove(prefix, &key.as_str(), value).into(),
                             )
-                            .await?;
+                            .await
+                            .unwrap();
                     }
                 }
             }
@@ -131,7 +140,8 @@ impl Reducer {
                 if let Some((key, value)) = self.get_key_value(&produced, &tx, &output_ref) {
                     output
                         .send(model::CRDTCommand::set_add(prefix, &key, value).into())
-                        .await?;
+                        .await
+                        .unwrap();
                 }
             }
         }

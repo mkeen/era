@@ -17,8 +17,8 @@ rollback_db_path = "/data/era/rollback_buffer"
 
 [storage]
 type = "Redis"
-connection_params = "redis://127.0.0.1:6379/4"
-cursor_key = "_cursor1"
+connection_params = "redis://127.0.0.1:6379/6"
+cursor_key = "_cursor"
 
 [[reducers]]
 type = "AssetMetadata"
@@ -41,15 +41,15 @@ key_prefix = "p"
 type = "Parameters"
 key_prefix = "pr"
 
-#[[reducers]]
-#type = "UtxoOwners"
-#key_prefix = "tx"
-#coin_key_prefix = "c"
-
 [[reducers]]
-type = "UtxoByAddress"
+type = "UtxoOwners"
 key_prefix = "tx"
 coin_key_prefix = "c"
+
+# [[reducers]]
+# type = "UtxoByAddress"
+# key_prefix = "tx"
+# coin_key_prefix = "c"
 
 [[reducers]]
 type = "MultiAssetBalances"

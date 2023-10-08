@@ -8,6 +8,8 @@ use crate::{crosscut, model};
 
 pub mod macros;
 
+pub mod utils;
+
 pub mod ada_handle;
 pub mod asset_metadata;
 pub mod multi_asset_balances;

@@ -25,60 +25,6 @@ fn to_traverse<'b>(header: &'b HeaderContent) -> Result<MultiEraHeader<'b>, Erro
     .map_err(Error::cbor)
 }
 
-async fn intersect_from_config(
-    peer: &mut PeerClient,
-    intersect: &IntersectConfig,
-    mut cursor: Cursor,
-) -> Result<(), WorkerError> {
-    let chainsync = peer.chainsync();
-
-    match cursor.last_point().unwrap() {
-        Some(x) => {
-            log::info!("found existing cursor in storage plugin: {:?}", x);
-            let point = x.try_into().unwrap();
-            chainsync
-                .find_intersect(vec![point])
-                .await
-                .map_err(crate::Error::ouroboros)
-                .unwrap();
-        }
-        None => match &intersect {
-            crosscut::IntersectConfig::Origin => {
-                chainsync
-                    .intersect_origin()
-                    .await
-                    .map_err(crate::Error::ouroboros)
-                    .unwrap();
-            }
-            crosscut::IntersectConfig::Tip => {
-                chainsync
-                    .intersect_tip()
-                    .await
-                    .map_err(crate::Error::ouroboros)
-                    .unwrap();
-            }
-            crosscut::IntersectConfig::Point(_, _) => {
-                let point = intersect.get_point().expect("point value");
-                chainsync
-                    .find_intersect(vec![point])
-                    .await
-                    .map_err(crate::Error::ouroboros)
-                    .unwrap();
-            }
-            crosscut::IntersectConfig::Fallbacks(_) => {
-                let points = intersect.get_fallbacks().expect("fallback values");
-                chainsync
-                    .find_intersect(points)
-                    .await
-                    .map_err(crate::Error::ouroboros)
-                    .unwrap();
-            }
-        },
-    };
-
-    Ok(())
-}
-
 pub struct Worker {
     min_depth: usize,
     peer: PeerClient,
@@ -126,9 +72,51 @@ impl gasket::framework::Worker<Stage> for Worker {
             .await
             .unwrap();
 
-        intersect_from_config(&mut peer_session, &stage.intersect, stage.cursor.clone())
-            .await
-            .unwrap();
+        let chainsync = peer_session.chainsync();
+
+        match stage.cursor.clone().last_point().unwrap() {
+            Some(x) => {
+                log::info!("found existing cursor in storage plugin: {:?}", x);
+                let point = x.try_into().unwrap();
+                chainsync
+                    .find_intersect(vec![point])
+                    .await
+                    .map_err(crate::Error::ouroboros)
+                    .unwrap();
+            }
+            None => match &stage.intersect {
+                crosscut::IntersectConfig::Origin => {
+                    chainsync
+                        .intersect_origin()
+                        .await
+                        .map_err(crate::Error::ouroboros)
+                        .unwrap();
+                }
+                crosscut::IntersectConfig::Tip => {
+                    chainsync
+                        .intersect_tip()
+                        .await
+                        .map_err(crate::Error::ouroboros)
+                        .unwrap();
+                }
+                crosscut::IntersectConfig::Point(_, _) => {
+                    let point = &stage.intersect.get_point().expect("point value");
+                    chainsync
+                        .find_intersect(vec![point.clone()])
+                        .await
+                        .map_err(crate::Error::ouroboros)
+                        .unwrap();
+                }
+                crosscut::IntersectConfig::Fallbacks(_) => {
+                    let points = &stage.intersect.get_fallbacks().expect("fallback values");
+                    chainsync
+                        .find_intersect(points.clone())
+                        .await
+                        .map_err(crate::Error::ouroboros)
+                        .unwrap();
+                }
+            },
+        }
 
         Ok(Self {
             min_depth: stage.config.min_depth.unwrap_or(10 as usize),
@@ -214,36 +202,30 @@ impl gasket::framework::Worker<Stage> for Worker {
         }
 
         // see if we have points that already reached certain depth
-        if self.chain_buffer.size() >= self.min_depth {
-            let ready = self.chain_buffer.pop_with_depth(self.min_depth);
+        let ready = self.chain_buffer.pop_with_depth(self.min_depth);
 
-            if ready.len() > 0 {
-                let range = (
-                    ready.first().unwrap().clone(),
-                    ready.last().unwrap().clone(),
-                );
+        if ready.len() > 0 {
+            let range = (
+                ready.first().unwrap().clone(),
+                ready.last().unwrap().clone(),
+            );
 
-                let blocks = self
-                    .peer
-                    .blockfetch()
-                    .fetch_range(Range::from(range.clone()))
+            let blocks = self
+                .peer
+                .blockfetch()
+                .fetch_range(Range::from(range.clone()))
+                .await
+                .or_retry()?;
+
+            for block in blocks {
+                stage.block_count.inc(1);
+
+                stage
+                    .output
+                    .send(model::RawBlockPayload::roll_forward(block))
                     .await
-                    .or_retry()
-                    .unwrap();
-
-                for block in blocks {
-                    stage.block_count.inc(1);
-
-                    stage
-                        .output
-                        .send(model::RawBlockPayload::roll_forward(block))
-                        .await
-                        .or_retry()
-                        .unwrap()
-                }
+                    .or_retry()?;
             }
-        } else {
-            log::debug!("skipping work");
         }
 
         Ok(())

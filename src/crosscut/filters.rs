@@ -287,7 +287,7 @@ mod tests {
     use super::{eval_predicate, AddressPattern, Predicate};
 
     fn test_predicate_in_block(predicate: &Predicate, expected_txs: &[usize]) {
-        let cbor = include_str!("../../assets/test.block");
+        let cbor = include_str!("../../assets/blocks/scrolls");
         let bytes = hex::decode(cbor).unwrap();
         let block = MultiEraBlock::decode(&bytes).unwrap();
         let ctx = BlockContext::default();
