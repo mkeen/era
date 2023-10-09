@@ -77,7 +77,12 @@ impl TuiConsole {
             let state = match tether.check_state() {
                 gasket::runtime::TetherState::Dropped => "dropped!",
                 gasket::runtime::TetherState::Blocked(_) => "blocked!",
-                gasket::runtime::TetherState::Alive(x) => "alive",
+                gasket::runtime::TetherState::Alive(x) => match x {
+                    gasket::runtime::StagePhase::Bootstrap => "bootstrapping...",
+                    gasket::runtime::StagePhase::Working => "working...",
+                    gasket::runtime::StagePhase::Teardown => "tearing down...",
+                    gasket::runtime::StagePhase::Ended => "ended...",
+                },
             };
 
             match tether.read_metrics() {

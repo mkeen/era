@@ -18,12 +18,15 @@ pub struct Stage {
     pub enrich_config: Option<enrich::Config>,
     pub reducer_config: Option<Vec<reducers::Config>>,
     pub storage_config: Option<storage::Config>,
+    pub args_console: Option<console::Mode>,
 }
 
 // Way too many clones down in here... need to tighten up
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Pipeline {
     async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
+        console::initialize(&Some(stage.args_console.clone().unwrap()));
+
         let mut pipe = Self {
             policy: Policy {
                 tick_timeout: Some(Duration::from_secs(3)),
@@ -67,11 +70,6 @@ impl gasket::framework::Worker<Stage> for Pipeline {
 
         connect_ports(source_stage.borrow_output_port(), enrich_input_port, 100);
         connect_ports(enrich_stage.borrow_output_port(), &mut reducer.input, 100);
-        // connect_ports(
-        //     &mut reducer.output.lock().await.to_owned(),
-        //     storage_stage.borrow_input_port(),
-        //     100,
-        // );
 
         pipe.tethers.push(storage_stage.spawn_stage(&pipe));
         pipe.tethers.push(spawn_stage(reducer, pipe.policy.clone()));
@@ -87,7 +85,8 @@ impl gasket::framework::Worker<Stage> for Pipeline {
     }
 
     async fn execute(&mut self, _: &(), stage: &mut Stage) -> Result<(), WorkerError> {
-        std::thread::sleep(Duration::from_secs(60));
+        console::refresh(&stage.args_console, self);
+        std::thread::sleep(Duration::from_secs(5));
         Ok(())
     }
 }
@@ -106,14 +105,13 @@ impl Pipeline {
         storage_config: storage::Config,
         args_console: console::Mode,
     ) -> Stage {
-        console::initialize(&Some(args_console));
-
         Stage {
             ctx: Some(ctx.clone()),
             sources_config: Some(sources_config),
             storage_config: Some(storage_config),
             enrich_config: Some(enrich_config),
             reducer_config: Some(config_reducer),
+            args_console: Some(args_console),
         }
     }
 
