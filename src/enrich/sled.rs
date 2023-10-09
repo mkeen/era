@@ -290,9 +290,13 @@ pub struct Stage {
 
     #[metric]
     pub inserts_counter: gasket::metrics::Counter,
+    #[metric]
     pub blocks_counter: gasket::metrics::Counter,
+    #[metric]
     pub remove_counter: gasket::metrics::Counter,
+    #[metric]
     pub matches_counter: gasket::metrics::Counter,
+    #[metric]
     pub mismatches_counter: gasket::metrics::Counter,
 }
 
