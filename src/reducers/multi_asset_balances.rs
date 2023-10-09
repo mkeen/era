@@ -1,5 +1,5 @@
-use crate::bootstrap::Context;
 use crate::model::CRDTCommand;
+use crate::pipeline::Context;
 use crate::{crosscut, model, prelude::*};
 use gasket::messaging::tokio::OutputPort;
 use pallas::ledger::traverse::MultiEraBlock;
@@ -14,6 +14,8 @@ use blake2::Blake2bVar;
 use pallas::ledger::addresses::{Address, StakeAddress};
 use std::collections::HashMap;
 use std::result::Result;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Serialize, Deserialize)]
 struct MultiAssetSingleAgg {
@@ -37,7 +39,7 @@ struct PreviousOwnerAgg {
     transferred_out: i64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Config {
     pub key_prefix: Option<String>,
     pub filter: Option<crosscut::filters::Predicate>,
@@ -54,6 +56,7 @@ fn asset_fingerprint(data_list: [&str; 2]) -> Result<String, bech32::Error> {
     bech32::encode("asset", base32_combined, Variant::Bech32)
 }
 
+#[derive(Clone)]
 pub struct Reducer {
     config: Config,
     chain: crosscut::ChainWellKnownInfo,
@@ -270,18 +273,20 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &mut OutputPort<model::CRDTCommand>,
+        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         let slot = block.slot();
 
+        let out = &mut output.lock().await;
+
         for tx in block.txs() {
             for consumes in tx.consumes().iter() {
-                self.process_spent(output, consumes, ctx, slot, rollback);
+                self.process_spent(out, consumes, ctx, slot, rollback);
             }
 
             for (_, utxo_produced) in tx.produces().iter() {
-                self.process_received(output, utxo_produced, slot, rollback);
+                self.process_received(out, utxo_produced, slot, rollback);
             }
         }
 

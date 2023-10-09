@@ -8,9 +8,9 @@ use gasket::{
     runtime::Tether,
 };
 
-use crate::{bootstrap, model};
+use crate::{model, pipeline};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum Config {
     Skip(skip::Config),
@@ -24,7 +24,7 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn bootstrapper(self, ctx: &bootstrap::Context) -> Option<Bootstrapper> {
+    pub fn bootstrapper(self, ctx: &pipeline::Context) -> Option<Bootstrapper> {
         Some(match self {
             Config::Skip(w) => Bootstrapper::Skip(w.bootstrapper()),
             Config::Sled(w) => Bootstrapper::Sled(w.bootstrapper(ctx)),
@@ -52,7 +52,7 @@ impl Bootstrapper {
         }
     }
 
-    pub fn spawn_stage(self, pipeline: &bootstrap::Pipeline) -> Tether {
+    pub fn spawn_stage(self, pipeline: &pipeline::Pipeline) -> Tether {
         match self {
             Bootstrapper::Skip(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),
             Bootstrapper::Sled(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),

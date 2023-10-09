@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 
 use crate::{
-    bootstrap, crosscut,
+    crosscut,
     model::{self, CRDTCommand},
     Error,
 };

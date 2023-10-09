@@ -1,14 +1,19 @@
+use std::sync::Arc;
+
 use pallas::ledger::addresses::{Address, StakeAddress};
 use pallas::ledger::traverse::MultiEraOutput;
 use pallas::ledger::traverse::{MultiEraAsset, MultiEraBlock};
 use serde::Deserialize;
 
 use gasket::messaging::tokio::OutputPort;
+use tokio::sync::Mutex;
 
 use crate::model::CRDTCommand;
 use crate::{crosscut, model};
 
-#[derive(Deserialize)]
+use super::utils::AssetFingerprint;
+
+#[derive(Deserialize, Clone)]
 pub struct Config {
     pub key_prefix: Option<String>,
     pub policy_id: Option<String>,
@@ -23,6 +28,7 @@ impl Default for Config {
     }
 }
 
+#[derive(Clone)]
 pub struct Reducer {
     config: Config,
 }
@@ -48,9 +54,11 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &mut OutputPort<CRDTCommand>,
+        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
+        let mut out = output.lock().await;
+
         for tx in block.txs().iter() {
             if rollback {
                 for input in tx.consumes() {
@@ -81,39 +89,29 @@ impl Reducer {
                         };
 
                         for asset in asset_names {
-                            output
-                                .send(
-                                    model::CRDTCommand::any_write_wins(
-                                        Some(
-                                            self.config
-                                                .key_prefix
-                                                .clone()
-                                                .unwrap_or_default()
-                                                .as_str(),
-                                        ),
-                                        asset.clone(),
-                                        soa.to_string(),
-                                    )
-                                    .into(),
+                            out.send(
+                                model::CRDTCommand::any_write_wins(
+                                    Some(
+                                        self.config.key_prefix.clone().unwrap_or_default().as_str(),
+                                    ),
+                                    asset.clone(),
+                                    soa.to_string(),
                                 )
-                                .await;
+                                .into(),
+                            )
+                            .await;
 
-                            output
-                                .send(
-                                    model::CRDTCommand::any_write_wins(
-                                        Some(
-                                            self.config
-                                                .key_prefix
-                                                .clone()
-                                                .unwrap_or_default()
-                                                .as_str(),
-                                        ),
-                                        soa.to_string(),
-                                        asset,
-                                    )
-                                    .into(),
+                            out.send(
+                                model::CRDTCommand::any_write_wins(
+                                    Some(
+                                        self.config.key_prefix.clone().unwrap_or_default().as_str(),
+                                    ),
+                                    soa.to_string(),
+                                    asset,
                                 )
-                                .await;
+                                .into(),
+                            )
+                            .await;
                         }
                     }
                 }
@@ -123,7 +121,20 @@ impl Reducer {
 
                     for asset_list in txo.non_ada_assets() {
                         for asset in asset_list.assets() {
-                            asset_names.push(hex::encode(asset.name()).to_string());
+                            match String::from_utf8(asset.name().to_vec()) {
+                                Ok(asset_name) => asset_names.push(asset_name),
+                                Err(_) => log::warn!(
+                                    "could not parse asset name {} not a valid ada handle?",
+                                    AssetFingerprint::from_parts(
+                                        hex::encode(asset.name()).as_str(),
+                                        hex::encode(asset.policy()).as_str()
+                                    )
+                                    .unwrap()
+                                    .fingerprint()
+                                    .unwrap()
+                                    .as_str()
+                                ),
+                            };
                         }
                     }
 
@@ -143,31 +154,27 @@ impl Reducer {
                     };
 
                     for asset in asset_names {
-                        output
-                            .send(
-                                model::CRDTCommand::any_write_wins(
-                                    Some(
-                                        self.config.key_prefix.clone().unwrap_or_default().as_str(),
-                                    ),
-                                    asset.clone(),
-                                    soa.to_string(),
-                                )
-                                .into(),
+                        out.send(
+                            model::CRDTCommand::any_write_wins(
+                                Some(self.config.key_prefix.clone().unwrap_or_default().as_str()),
+                                asset.clone(),
+                                soa.to_string(),
                             )
-                            .await;
+                            .into(),
+                        )
+                        .await
+                        .unwrap();
 
-                        output
-                            .send(
-                                model::CRDTCommand::any_write_wins(
-                                    Some(
-                                        self.config.key_prefix.clone().unwrap_or_default().as_str(),
-                                    ),
-                                    soa.to_string(),
-                                    asset,
-                                )
-                                .into(),
+                        out.send(
+                            model::CRDTCommand::any_write_wins(
+                                Some(self.config.key_prefix.clone().unwrap_or_default().as_str()),
+                                soa.to_string(),
+                                asset,
                             )
-                            .await;
+                            .into(),
+                        )
+                        .await
+                        .unwrap();
                     }
                 }
             }

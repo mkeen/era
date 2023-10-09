@@ -10,12 +10,11 @@ use gasket::{messaging::tokio::InputPort, runtime::Tether};
 use serde::Deserialize;
 
 use crate::{
-    bootstrap,
-    crosscut::{self, historic, PointArg},
-    model,
+    crosscut::{self, PointArg},
+    model, pipeline,
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum Config {
     Skip(skip::Config),
@@ -110,7 +109,7 @@ impl Bootstrapper {
         }
     }
 
-    pub fn spawn_stage(self, pipeline: &bootstrap::Pipeline) -> Tether {
+    pub fn spawn_stage(self, pipeline: &pipeline::Pipeline) -> Tether {
         match self {
             Bootstrapper::Skip(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),
             Bootstrapper::Redis(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),

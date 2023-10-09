@@ -1,14 +1,19 @@
-use async_trait;
-use pallas::{ledger::traverse::MultiEraBlock, network::miniprotocols::Point};
+use std::sync::Arc;
 
-use crate::bootstrap::Context;
+use async_trait;
+use futures::future::join_all;
+use pallas::{ledger::traverse::MultiEraBlock, network::miniprotocols::Point};
+use tokio::sync::Mutex;
+
 use crate::model::{CRDTCommand, EnrichedBlockPayload};
+use crate::pipeline::Context;
+
 use crate::{crosscut, model, prelude::*, reducers};
 
 use super::Reducer;
 
 use gasket::framework::*;
-use gasket::messaging::tokio::{InputPort, OutputPort};
+use gasket::messaging::tokio::{connect_ports, InputPort, OutputPort};
 
 struct Config {
     chain: crosscut::ChainWellKnownInfo,
@@ -20,15 +25,14 @@ impl Worker {
     async fn reduce_block<'b>(
         &mut self,
         block_raw: &'b Vec<u8>,
+        block_parsed: &'b MultiEraBlock<'b>,
         rollback: bool,
-        ctx: &model::BlockContext,
+        ctx: &'b model::BlockContext,
         last_good_block_rollback_info: Option<(Point, u64)>,
-        output: &mut OutputPort<CRDTCommand>,
-        error_policy: &crosscut::policies::RuntimePolicy,
-        reducers: &mut Vec<Reducer>,
+        output: &'b Arc<Mutex<OutputPort<CRDTCommand>>>,
+        error_policy: &'b crosscut::policies::RuntimePolicy,
+        reducers: &'b mut Vec<Reducer>,
     ) -> Option<u64> {
-        let block_parsed = MultiEraBlock::decode(block_raw).unwrap();
-
         let point = match rollback {
             true => {
                 let (last_point, _) = last_good_block_rollback_info.clone().unwrap();
@@ -45,10 +49,16 @@ impl Worker {
             false => block_parsed.number(),
         };
 
-        output
-            .send(model::CRDTCommand::block_starting(&block_parsed).into())
-            .await
-            .unwrap();
+        match output {
+            _ => {
+                output
+                    .lock()
+                    .await
+                    .send(model::CRDTCommand::block_starting(&block_parsed).into())
+                    .await
+                    .unwrap();
+            }
+        }
 
         if rollback {
             log::warn!(
@@ -58,15 +68,29 @@ impl Worker {
             );
         }
 
+        let mut handles = Vec::new();
         for reducer in reducers {
-            reducer
-                .reduce_block(&block_parsed, ctx, rollback, output, error_policy)
-                .await
-                .unwrap();
+            handles.push(reducer.reduce_block(&block_parsed, &ctx, rollback, output, error_policy));
+        }
+
+        let results = futures::future::join_all(handles).await;
+
+        for res in results {
+            match res {
+                Ok(_) => {}
+                Err(_) => {
+                    panic!("Reducer error")
+                }
+            };
         }
 
         output
-            .send(model::CRDTCommand::block_finished(point, block_raw.clone(), rollback).into())
+            .lock()
+            .await
+            .send(
+                model::CRDTCommand::block_finished(point.clone(), block_raw.clone(), rollback)
+                    .into(),
+            )
             .await
             .unwrap();
 
@@ -74,19 +98,28 @@ impl Worker {
     }
 }
 
-pub fn bootstrap(ctx: &Context, reducers: Vec<reducers::Config>) -> Stage {
-    Stage {
+pub async fn bootstrap(
+    ctx: &Context,
+    reducers: Vec<reducers::Config>,
+    storage_input: &mut InputPort<CRDTCommand>,
+) -> Stage {
+    let mut output: OutputPort<CRDTCommand> = Default::default();
+    connect_ports(&mut output, storage_input, 100);
+
+    let stage = Stage {
         config: Config {
             chain: ctx.chain.clone(),
         },
         reducers: reducers.into_iter().map(|x| x.bootstrapper(&ctx)).collect(),
         input: Default::default(),
-        output: Default::default(),
+        output: Arc::new(Mutex::new(output)),
         chain_tip: Default::default(),
         ops_count: Default::default(),
         last_block: Default::default(),
         error_policy: ctx.error_policy.clone(),
-    }
+    };
+
+    stage
 }
 
 #[derive(Stage)]
@@ -102,7 +135,7 @@ pub struct Stage {
     error_policy: crosscut::policies::RuntimePolicy,
 
     pub input: InputPort<EnrichedBlockPayload>,
-    pub output: OutputPort<CRDTCommand>,
+    pub output: Arc<Mutex<OutputPort<CRDTCommand>>>,
 
     #[metric]
     chain_tip: gasket::metrics::Gauge,
@@ -140,10 +173,11 @@ impl gasket::framework::Worker<Stage> for Worker {
                 stage.last_block.set(
                     self.reduce_block(
                         &block,
+                        &MultiEraBlock::decode(block).unwrap(),
                         false,
                         &ctx,
                         None,
-                        &mut stage.output,
+                        &stage.output,
                         &stage.error_policy,
                         &mut stage.reducers,
                     )
@@ -155,10 +189,11 @@ impl gasket::framework::Worker<Stage> for Worker {
                 stage.last_block.set(
                     self.reduce_block(
                         &block,
+                        &MultiEraBlock::decode(block).unwrap(),
                         true,
                         &ctx,
                         Some(last_block_rollback_info.clone()),
-                        &mut stage.output,
+                        &stage.output,
                         &stage.error_policy,
                         &mut stage.reducers,
                     )

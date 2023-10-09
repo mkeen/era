@@ -3,8 +3,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use era::bootstrap::Pipeline;
-
 use gasket::metrics::Reading;
 use lazy_static::{__Deref, lazy_static};
 use log::Log;
@@ -74,7 +72,7 @@ impl TuiConsole {
         }
     }
 
-    fn refresh(&self, pipeline: &Pipeline) {
+    fn refresh(&self, pipeline: &super::Pipeline) {
         for tether in pipeline.tethers.iter() {
             let state = match tether.check_state() {
                 gasket::runtime::TetherState::Dropped => "dropped!",
@@ -164,7 +162,7 @@ impl PlainConsole {
         }
     }
 
-    fn refresh(&self, pipeline: &Pipeline) {
+    fn refresh(&self, pipeline: &super::Pipeline) {
         let mut last_report = self.last_report.lock().unwrap();
 
         if last_report.elapsed() <= Duration::from_secs(10) {
@@ -219,7 +217,7 @@ pub fn initialize(mode: &Option<Mode>) {
     }
 }
 
-pub fn refresh(mode: &Option<Mode>, pipeline: &Pipeline) {
+pub fn refresh(mode: &Option<Mode>, pipeline: &super::Pipeline) {
     match mode {
         Some(Mode::TUI) => TUI_CONSOLE.refresh(pipeline),
         _ => PLAIN_CONSOLE.refresh(pipeline),

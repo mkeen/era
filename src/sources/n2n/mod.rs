@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use pallas::network::miniprotocols::Point;
 use serde::Deserialize;
 
-use crate::{bootstrap, crosscut, storage::Cursor};
+use crate::{crosscut, pipeline, storage::Cursor};
 
 #[derive(Clone, Debug)]
 pub enum ChainSyncInternalPayload {
@@ -27,7 +27,7 @@ impl ChainSyncInternalPayload {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Config {
     pub address: String,
     pub min_depth: Option<usize>,
@@ -36,7 +36,7 @@ pub struct Config {
 impl Config {
     pub fn bootstrapper(
         self,
-        ctx: &bootstrap::Context,
+        ctx: &pipeline::Context,
         cursor: Cursor,
         blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
     ) -> chainsync::Stage {

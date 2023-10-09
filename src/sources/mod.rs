@@ -1,9 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use crate::{
-    bootstrap, crosscut, model,
-    storage::{self, Cursor},
-};
+use crate::{crosscut, model, pipeline, storage::Cursor};
 use gasket::{messaging::tokio::OutputPort, runtime::Tether};
 use serde::Deserialize;
 
@@ -14,7 +11,7 @@ pub mod n2n;
 pub mod utils;
 pub mod utxorpc;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum Config {
     N2N(n2n::Config),
@@ -24,7 +21,7 @@ pub enum Config {
 impl Config {
     pub fn bootstrapper(
         self,
-        ctx: &bootstrap::Context,
+        ctx: &pipeline::Context,
         cursor: Cursor,
         blocks: Option<Arc<Mutex<crosscut::historic::BufferBlocks>>>,
     ) -> Option<Bootstrapper> {
@@ -59,7 +56,7 @@ impl Bootstrapper {
         }
     }
 
-    pub fn spawn_stage(mut self, pipeline: &bootstrap::Pipeline) -> Tether {
+    pub fn spawn_stage(mut self, pipeline: &pipeline::Pipeline) -> Tether {
         match self {
             Bootstrapper::N2N(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),
             Bootstrapper::UTXORPC(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),

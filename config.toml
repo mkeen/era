@@ -17,12 +17,14 @@ rollback_db_path = "/data/era/rollback_buffer"
 
 [storage]
 type = "Redis"
-connection_params = "redis://127.0.0.1:6379/6"
+connection_params = "redis://127.0.0.1:6379/0"
 cursor_key = "_cursor"
 
 [[reducers]]
 type = "AssetMetadata"
 projection = "Json"
+key_prefix = "m"
+royalty_key_prefix = "m.r"
 historical_metadata = true
 policy_asset_index = true
 royalty_metatada = true
@@ -41,21 +43,25 @@ key_prefix = "p"
 type = "Parameters"
 key_prefix = "pr"
 
-[[reducers]]
-type = "UtxoOwners"
-key_prefix = "tx"
-coin_key_prefix = "c"
-
 # [[reducers]]
-# type = "UtxoByAddress"
+# type = "UtxoOwners"
 # key_prefix = "tx"
 # coin_key_prefix = "c"
+
+[[reducers]]
+type = "UtxoByAddress"
+key_prefix = "tx"
+coin_key_prefix = "c"
 
 [[reducers]]
 type = "MultiAssetBalances"
 
 [intersect]
-type = "Origin"
+type = "Point"
+value = [
+    76066702,
+    "9e1a6284f0ff3bd59cabb2eac9feef4acefe8cd10c5b63825dfdea79f65bfcea",
+]
 
 [policy]
 missing_data = "Skip"

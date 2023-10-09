@@ -8,7 +8,7 @@ use redis::{Cmd, Commands, ConnectionLike, ToRedisArgs};
 use serde::Deserialize;
 
 use crate::model::{CRDTCommand, Member, Value};
-use crate::{bootstrap, crosscut, model};
+use crate::{crosscut, model};
 
 impl ToRedisArgs for model::Value {
     fn write_redis_args<W>(&self, out: &mut W)

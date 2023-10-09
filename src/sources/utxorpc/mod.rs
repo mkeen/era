@@ -4,24 +4,22 @@ use gasket::framework::*;
 use gasket::messaging::tokio::OutputPort;
 use log::*;
 use pallas::ledger::traverse::MultiEraBlock;
-use pallas::network::miniprotocols::Point;
 use serde::Deserialize;
 use tonic::transport::Channel;
 use tonic::Streaming;
 
 use crate::crosscut::PointArg;
 use crate::model::RawBlockPayload;
-use crate::{bootstrap, crosscut, storage::Cursor};
+use crate::{crosscut, storage::Cursor};
 
-use utxorpc::proto::cardano::v1::BlockHeader;
 use utxorpc::proto::sync::v1::any_chain_block::Chain;
 use utxorpc::proto::sync::v1::chain_sync_service_client::ChainSyncServiceClient;
 use utxorpc::proto::sync::v1::follow_tip_response::Action;
 use utxorpc::proto::sync::v1::{BlockRef, DumpHistoryRequest, FollowTipRequest, FollowTipResponse};
 
-use crate::bootstrap::Context;
+use crate::pipeline::Context;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Config {
     pub address: String,
     pub min_depth: Option<usize>,

@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
+use futures::Future;
 use gasket::messaging::tokio::OutputPort;
 use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
-use crate::bootstrap::Context;
 use crate::model::CRDTCommand;
+use crate::pipeline::Context;
 use crate::{crosscut, model};
 
 pub mod macros;
@@ -21,7 +25,7 @@ pub mod utxo_owners;
 
 pub mod worker;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum Config {
     UtxoOwners(utxo_owners::Config),
@@ -49,6 +53,7 @@ impl Config {
     }
 }
 
+#[derive(Clone)]
 pub enum Reducer {
     UtxoOwners(utxo_owners::Reducer),
     UtxoByAddress(utxo_by_address::Reducer),
@@ -66,41 +71,32 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &mut OutputPort<CRDTCommand>,
+        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
-        let result = match self {
+        match self {
             Reducer::UtxoOwners(x) => {
                 x.reduce_block(block, ctx, rollback, output, error_policy)
-                    .await?
+                    .await
             }
             Reducer::UtxoByAddress(x) => {
                 x.reduce_block(block, ctx, rollback, output, error_policy)
-                    .await?
+                    .await
             }
-            Reducer::Parameters(x) => {
-                x.reduce_block(block, rollback, output, error_policy)
-                    .await?
-            }
+            Reducer::Parameters(x) => x.reduce_block(block, rollback, output, error_policy).await,
             Reducer::AssetMetadata(x) => {
-                x.reduce_block(block, rollback, output, error_policy)
-                    .await?
+                x.reduce_block(block, rollback, output, error_policy).await
             }
-            Reducer::PolicyAssetsMoved(x) => x.reduce_block(block, output, error_policy).await?,
+            Reducer::PolicyAssetsMoved(x) => x.reduce_block(block, output, error_policy).await,
             Reducer::MultiAssetBalances(x) => {
                 x.reduce_block(block, ctx, rollback, output, error_policy)
-                    .await?
+                    .await
             }
             Reducer::AdaHandle(x) => {
                 x.reduce_block(block, ctx, rollback, output, error_policy)
-                    .await?
+                    .await
             }
-            Reducer::StakeToPool(x) => {
-                x.reduce_block(block, rollback, output, error_policy)
-                    .await?
-            }
-        };
-
-        Ok(result)
+            Reducer::StakeToPool(x) => x.reduce_block(block, rollback, output, error_policy).await,
+        }
     }
 }

@@ -1,9 +1,12 @@
 use clap;
-use era::{bootstrap, crosscut, enrich, reducers, sources, storage};
+use era::{
+    crosscut, enrich,
+    pipeline::{self, Context},
+    reducers, sources, storage,
+};
+use gasket::runtime::spawn_stage;
 use serde::Deserialize;
 use std::time::Duration;
-
-use crate::console;
 
 #[derive(Deserialize)]
 #[serde(tag = "type")]
@@ -68,63 +71,31 @@ impl ConfigRoot {
     }
 }
 
-fn should_stop(pipeline: &bootstrap::Pipeline) -> bool {
-    pipeline
-        .tethers
-        .iter()
-        .any(|tether| match tether.check_state() {
-            gasket::runtime::TetherState::Alive(_) => false,
-            _ => true,
-        })
-}
-
-fn shutdown(pipeline: bootstrap::Pipeline) {
-    for tether in pipeline.tethers {
-        let state = tether.check_state();
-        log::warn!("dismissing stage: {} with state {:?}", tether.name(), state);
-        tether.dismiss_stage().expect("stage stops");
-
-        // Can't join the stage because there's a risk of deadlock, usually
-        // because a stage gets stuck sending into a port which depends on a
-        // different stage not yet dismissed. The solution is to either create a
-        // DAG of dependencies and dismiss in the correct order, or implement a
-        // 2-phase teardown where ports are disconnected and flushed
-        // before joining the stage.
-
-        //tether.join_stage();
-    }
-}
-
 pub fn run(args: &Args) -> Result<(), era::Error> {
-    console::initialize(&args.console);
-
     let config = ConfigRoot::new(&args.config)
         .map_err(|err| era::Error::ConfigError(format!("{:?}", err)))?;
 
-    let chain = config.chain.unwrap_or_default().into();
-    let policy = config.policy.unwrap_or_default().into();
+    spawn_stage(
+        pipeline::Pipeline::bootstrap(
+            &Context {
+                chain: config.chain.unwrap_or_default().into(),
+                intersect: config.intersect,
+                finalize: config.finalize,
+                error_policy: config.policy.unwrap_or_default(),
+                block: config.blocks.unwrap(),
+            },
+            config.source,
+            config.enrich.unwrap_or_default(),
+            config.reducers,
+            config.storage,
+            args.console.clone().unwrap_or_default(),
+        ),
+        Default::default(), // todo dont use default policy
+    );
 
-    let ctx = bootstrap::Context {
-        chain,
-        intersect: config.intersect,
-        finalize: config.finalize,
-        error_policy: policy,
-        block: config.blocks.unwrap(),
-    };
-
-    let enrich = config.enrich.unwrap_or_default().bootstrapper(&ctx);
-
-    let reducer = reducers::worker::bootstrap(&ctx, config.reducers);
-
-    let pipeline =
-        bootstrap::Pipeline::bootstrap(&ctx, config.source, enrich, reducer, config.storage);
-
-    while !should_stop(&pipeline) {
-        console::refresh(&args.console, &pipeline);
+    while true {
         std::thread::sleep(Duration::from_millis(250));
     }
-
-    shutdown(pipeline);
 
     Ok(())
 }
@@ -138,5 +109,5 @@ pub struct Args {
 
     #[clap(long, value_parser)]
     //#[clap(description = "type of progress to display")],
-    console: Option<console::Mode>,
+    console: Option<pipeline::console::Mode>,
 }

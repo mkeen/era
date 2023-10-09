@@ -1,19 +1,23 @@
+use std::sync::Arc;
+
 use pallas::ledger::primitives::alonzo;
 use pallas::ledger::primitives::alonzo::{PoolKeyhash, StakeCredential};
 use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
 
 use gasket::messaging::tokio::OutputPort;
+use tokio::sync::Mutex;
 
 use crate::model::CRDTCommand;
 
 use crate::crosscut;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Config {
     pub key_prefix: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct Reducer {
     config: Config,
 }
@@ -43,9 +47,11 @@ impl Reducer {
         &mut self,
         block: &'b MultiEraBlock<'b>,
         rollback: bool,
-        output: &mut OutputPort<CRDTCommand>,
+        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
+        let mut out = output.lock().await;
+
         for tx in block.txs() {
             if tx.is_valid() {
                 for cert in tx.certs() {
@@ -53,15 +59,15 @@ impl Reducer {
                         match cert {
                             alonzo::Certificate::StakeDelegation(cred, pool) => {
                                 if !rollback {
-                                    output.send(self.registration(cred, pool).into()).await;
+                                    out.send(self.registration(cred, pool).into()).await?;
                                 } else {
-                                    output.send(self.deregistration(cred).into()).await;
+                                    out.send(self.deregistration(cred).into()).await?;
                                 }
                             }
 
                             alonzo::Certificate::StakeDeregistration(cred) => {
                                 if !rollback {
-                                    output.send(self.deregistration(cred).into()).await;
+                                    out.send(self.deregistration(cred).into()).await?;
                                 }
                             }
 

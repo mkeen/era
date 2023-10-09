@@ -1,7 +1,6 @@
 use clap::Parser;
 use std::process;
 
-mod console;
 mod daemon;
 
 #[derive(Parser)]

@@ -12,8 +12,9 @@ use serde::Deserialize;
 use sled::IVec;
 
 use crate::{
-    bootstrap, crosscut,
+    crosscut,
     model::{self, BlockContext, EnrichedBlockPayload, RawBlockPayload},
+    pipeline,
 };
 
 #[derive(Deserialize, Clone)]
@@ -23,7 +24,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(mut self, ctx: &bootstrap::Context) -> Stage {
+    pub fn bootstrapper(mut self, ctx: &pipeline::Context) -> Stage {
         self.rollback_db_path = Some(ctx.block.rollback_db_path.clone());
 
         Stage {

@@ -1,25 +1,29 @@
+use std::sync::Arc;
+
+use gasket::messaging::tokio::OutputPort;
 use pallas::codec::utils::CborWrap;
 use pallas::crypto::hash::Hash;
-use pallas::ledger::primitives::babbage::{
-    DatumOption, PlutusData, PseudoDatumOption, TransactionOutput,
-};
+use pallas::ledger::primitives::babbage::{PlutusData, PseudoDatumOption};
 use pallas::ledger::primitives::Fragment;
-use pallas::ledger::traverse::{MultiEraAsset, MultiEraBlock, MultiEraTx, OutputRef};
+use pallas::ledger::traverse::{MultiEraBlock, MultiEraTx};
 use pallas::ledger::traverse::{MultiEraOutput, OriginalHash};
 use serde::Deserialize;
 use serde_json::json;
+use tokio::sync::Mutex;
 
-use crate::model::EnrichedBlockPayload;
-use crate::{crosscut, model, prelude::*};
+use crate::model::CRDTCommand;
+use crate::{crosscut, model};
 
 use super::utils::AssetFingerprint;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Config {
-    pub prefix: Option<String>,
+    pub key_prefix: Option<String>,
+    pub coin_key_prefix: Option<String>,
     pub address_as_key: Option<bool>,
 }
 
+#[derive(Clone)]
 pub struct Reducer {
     config: Config,
 }
@@ -58,7 +62,7 @@ impl Reducer {
                 data["output_index"] =
                     serde_json::Value::from(serde_json::Number::from(output_ref.1));
             } else {
-                key = format!("{}#{}", hex::encode(output_ref.0.to_vec()), output_ref.1); // of course this would end up being an incomprehensable string of bytes
+                key = format!("{}#{}", hex::encode(output_ref.0.to_vec()), output_ref.1); // this should be good
                 data["address"] = serde_json::Value::String(address);
             }
 
@@ -105,17 +109,18 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &mut super::OutputPort<model::CRDTCommand>,
+        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::error::Error> {
         if rollback {
             return Ok(());
         }
 
-        let prefix = self.config.prefix.as_deref();
+        let prefix = &self.config.key_prefix.clone().unwrap_or("tx".to_string());
+
+        let out = &mut output.lock().await;
 
         for tx in block.txs() {
-            log::debug!("i see a tx {}", "d");
             for consumed in tx.consumes() {
                 let output_ref = consumed.output_ref();
 
@@ -125,12 +130,12 @@ impl Reducer {
                         &tx,
                         &(output_ref.hash().clone(), output_ref.index().clone()),
                     ) {
-                        output
-                            .send(
-                                model::CRDTCommand::set_remove(prefix, &key.as_str(), value).into(),
-                            )
-                            .await
-                            .unwrap();
+                        out.send(
+                            model::CRDTCommand::set_remove(Some(prefix), &key.as_str(), value)
+                                .into(),
+                        )
+                        .await
+                        .unwrap();
                     }
                 }
             }
@@ -138,8 +143,8 @@ impl Reducer {
             for (index, produced) in tx.produces() {
                 let output_ref = (tx.hash().clone(), index as u64);
                 if let Some((key, value)) = self.get_key_value(&produced, &tx, &output_ref) {
-                    output
-                        .send(model::CRDTCommand::set_add(prefix, &key, value).into())
+                    log::warn!("i see a tx {:?}", prefix);
+                    out.send(model::CRDTCommand::set_add(Some(prefix), &key, value).into())
                         .await
                         .unwrap();
                 }
