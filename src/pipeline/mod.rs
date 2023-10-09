@@ -80,13 +80,12 @@ impl gasket::framework::Worker<Stage> for Pipeline {
     }
 
     async fn schedule(&mut self, stage: &mut Stage) -> Result<WorkSchedule<()>, WorkerError> {
-        std::thread::sleep(Duration::from_secs(60));
+        std::thread::sleep(Duration::from_secs(1));
         Ok(WorkSchedule::Unit(()))
     }
 
     async fn execute(&mut self, _: &(), stage: &mut Stage) -> Result<(), WorkerError> {
         console::refresh(&stage.args_console, self);
-        std::thread::sleep(Duration::from_secs(5));
         Ok(())
     }
 }

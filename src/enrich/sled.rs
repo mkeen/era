@@ -31,7 +31,10 @@ impl Config {
             config: self,
             input: Default::default(),
             output: Default::default(),
-            inserts_count: Default::default(),
+            inserts_counter: Default::default(),
+            remove_counter: Default::default(),
+            matches_counter: Default::default(),
+            mismatches_counter: Default::default(),
             blocks_counter: Default::default(),
         }
     }
@@ -104,8 +107,14 @@ impl Worker {
         }
     }
 
-    fn insert_produced_utxos(&self, db: &sled::Db, txs: &[MultiEraTx]) -> Result<(), crate::Error> {
+    fn insert_produced_utxos(
+        &self,
+        db: &sled::Db,
+        txs: &[MultiEraTx],
+    ) -> Result<u64, crate::Error> {
         let mut insert_batch = sled::Batch::default();
+
+        let mut produced: u64 = 0;
 
         for tx in txs.iter() {
             for (idx, output) in tx.produces() {
@@ -115,25 +124,38 @@ impl Worker {
                 let body = output.encode();
                 let value: IVec = SledTxValue(era, body).try_into()?;
 
+                produced += 1;
+
                 insert_batch.insert(key.as_bytes(), value)
             }
         }
 
         let batch_results = db.apply_batch(insert_batch).or_retry();
 
-        batch_results.map_err(crate::Error::storage)
+        batch_results.map_err(crate::Error::storage);
+
+        Ok(produced)
     }
 
-    fn remove_produced_utxos(&self, db: &sled::Db, txs: &[MultiEraTx]) -> Result<(), crate::Error> {
+    fn remove_produced_utxos(
+        &self,
+        db: &sled::Db,
+        txs: &[MultiEraTx],
+    ) -> Result<u64, crate::Error> {
         let mut remove_batch = sled::Batch::default();
+
+        let mut removed_count: u64 = 0;
 
         for tx in txs.iter() {
             for (idx, _) in tx.produces() {
+                removed_count += 1;
                 remove_batch.remove(format!("{}#{}", tx.hash(), idx).as_bytes());
             }
         }
 
-        db.apply_batch(remove_batch).map_err(crate::Error::storage)
+        db.apply_batch(remove_batch)
+            .map_err(crate::Error::storage)
+            .and(Ok(removed_count))
     }
 
     #[inline]
@@ -142,8 +164,12 @@ impl Worker {
         db: &sled::Db,
         block_number: u64,
         txs: &[MultiEraTx],
-    ) -> Result<BlockContext, crate::Error> {
+    ) -> Result<(BlockContext, u64, u64), crate::Error> {
         let mut ctx = BlockContext::default();
+
+        let mut match_count: u64 = 0;
+        let mut mismatch_count: u64 = 0;
+
         ctx.block_number = block_number.clone();
 
         let required: Vec<_> = txs
@@ -160,10 +186,13 @@ impl Worker {
         for m in matches? {
             if let Some((key, era, cbor)) = m {
                 ctx.import_ref_output(&key, era, cbor);
+                match_count += 1;
+            } else {
+                mismatch_count += 1;
             }
         }
 
-        Ok(ctx)
+        Ok((ctx, match_count, mismatch_count))
     }
 
     fn get_removed(
@@ -179,9 +208,11 @@ impl Worker {
         db: &sled::Db,
         consumed_ring: &sled::Db,
         txs: &[MultiEraTx],
-    ) -> Result<(), ()> {
+    ) -> Result<(Result<(), ()>, u64), ()> {
         let mut remove_batch = sled::Batch::default();
         let mut current_values_batch = sled::Batch::default();
+
+        let mut remove_count: u64 = 0;
 
         let keys: Vec<_> = txs
             .iter()
@@ -199,6 +230,7 @@ impl Worker {
             }
 
             remove_batch.remove(key.to_string().as_bytes());
+            remove_count += 1;
         }
 
         let result: Result<(), ()> = match (
@@ -209,7 +241,7 @@ impl Worker {
             _ => Err(()),
         };
 
-        result
+        Ok((result, remove_count))
     }
 
     fn replace_consumed_utxos(
@@ -257,8 +289,11 @@ pub struct Stage {
     pub output: OutputPort<EnrichedBlockPayload>,
 
     #[metric]
-    pub inserts_count: gasket::metrics::Counter,
+    pub inserts_counter: gasket::metrics::Counter,
     pub blocks_counter: gasket::metrics::Counter,
+    pub remove_counter: gasket::metrics::Counter,
+    pub matches_counter: gasket::metrics::Counter,
+    pub mismatches_counter: gasket::metrics::Counter,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -303,15 +338,23 @@ impl gasket::framework::Worker<Stage> for Worker {
                     let block = MultiEraBlock::decode(&cbor).unwrap();
 
                     let txs = &block.txs();
+                    stage
+                        .inserts_counter
+                        .inc(self.insert_produced_utxos(db, txs).or_panic().unwrap());
 
-                    self.insert_produced_utxos(db, txs).or_panic()?;
-                    let ctx = self
+                    let (ctx, match_count, mismatch_count) = self
                         .par_fetch_referenced_utxos(db, block.number(), &txs)
                         .or_panic()?;
 
+                    stage.matches_counter.inc(match_count);
+                    stage.mismatches_counter.inc(mismatch_count);
+
                     // and finally we remove utxos consumed by the block
-                    self.remove_consumed_utxos(db, consumed_ring, &txs)
+                    let (_, removed_count) = self
+                        .remove_consumed_utxos(db, consumed_ring, &txs)
                         .expect("todo panic");
+
+                    stage.remove_counter.inc(removed_count);
 
                     stage.blocks_counter.inc(1);
 
@@ -329,14 +372,19 @@ impl gasket::framework::Worker<Stage> for Worker {
                         let txs = block.txs();
 
                         // Revert Anything to do with this block
-                        self.remove_produced_utxos(db, &txs)
-                            .expect("todo: panic error");
+                        stage
+                            .remove_counter
+                            .inc(self.remove_produced_utxos(db, &txs).unwrap());
+
                         self.replace_consumed_utxos(db, consumed_ring, &txs)
                             .expect("todo: panic error");
 
-                        let ctx = self
+                        let (ctx, match_count, mismatch_count) = self
                             .par_fetch_referenced_utxos(db, last_known_number.clone(), &txs)
                             .or_restart()?;
+
+                        stage.matches_counter.inc(match_count);
+                        stage.mismatches_counter.inc(mismatch_count);
 
                         return stage
                             .output
