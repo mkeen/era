@@ -77,8 +77,6 @@ impl TuiConsole {
 
     async fn refresh(&self, pipeline: &super::Pipeline) -> Option<()> {
         for tether in pipeline.tethers.iter() {
-            log::warn!("in tether {}", tether.name());
-
             let state = match tether.check_state() {
                 gasket::runtime::TetherState::Dropped => "dropped!",
                 gasket::runtime::TetherState::Blocked(_) => "blocked",

@@ -63,11 +63,10 @@ impl BufferBlocks {
     }
 
     pub async fn block_mem_add(&mut self, block_msg_payload: RawBlockPayload) -> () {
-        self.buffer.insert(0, block_msg_payload.to_owned());
+        self.buffer.push(block_msg_payload.to_owned());
         ()
     }
 
-    // When popping, you are getting the oldest item in list (thanks to insert above)
     pub async fn block_mem_take_all(&mut self) -> Option<Vec<RawBlockPayload>> {
         let empty: Vec<RawBlockPayload> = vec![];
         let blocks = mem::replace(&mut self.buffer, empty);
