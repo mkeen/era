@@ -48,6 +48,9 @@ pub struct Stage {
 
     #[metric]
     pub chain_tip: gasket::metrics::Gauge,
+
+    #[metric]
+    pub last_block: gasket::metrics::Gauge,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -67,7 +70,8 @@ impl gasket::framework::Worker<Stage> for Worker {
         match stage.cursor.clone().last_point().unwrap() {
             Some(x) => {
                 log::info!("found existing cursor in storage plugin: {:?}", x);
-                let point = x.try_into().unwrap();
+                let point: Point = x.try_into().unwrap();
+                //stage.last_block.set(point.slot_or_default() as i64);
                 peer.chainsync
                     .find_intersect(vec![point])
                     .await

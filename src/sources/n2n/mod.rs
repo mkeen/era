@@ -45,6 +45,7 @@ impl Config {
             config: self,
             output: Default::default(),
             chain_tip: Default::default(),
+            last_block: Default::default(),
             intersect: ctx.intersect.clone(),
             chain: ctx.chain.clone(),
             finalize: ctx.finalize.clone(),
