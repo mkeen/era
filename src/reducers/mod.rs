@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use futures::Future;
 use gasket::messaging::tokio::OutputPort;
 use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;

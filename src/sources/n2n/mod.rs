@@ -50,6 +50,7 @@ impl Config {
             finalize: ctx.finalize.clone(),
             cursor,
             blocks,
+            busy: false,
         }
     }
 }

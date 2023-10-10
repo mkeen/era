@@ -1,14 +1,13 @@
 use bech32::{ToBase32, Variant};
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
-use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use gasket::messaging::tokio::OutputPort;
 
 use pallas::crypto::hash::Hash;
-use pallas::ledger::traverse::{MultiEraAsset, MultiEraBlock, MultiEraPolicyAssets};
+use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
 
 use crate::model::CRDTCommand;

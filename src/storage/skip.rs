@@ -1,7 +1,4 @@
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::sync::{Arc, Mutex};
 
 use gasket::framework::*;
 use gasket::messaging::tokio::InputPort;
@@ -58,7 +55,7 @@ pub struct Stage {
 
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Worker {
-    async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
+    async fn bootstrap(_: &Stage) -> Result<Self, WorkerError> {
         Ok(Self {})
     }
 
@@ -70,7 +67,7 @@ impl gasket::framework::Worker<Stage> for Worker {
         Ok(WorkSchedule::Unit(msg.payload))
     }
 
-    async fn execute(&mut self, unit: &CRDTCommand, stage: &mut Stage) -> Result<(), WorkerError> {
+    async fn execute(&mut self, _: &CRDTCommand, stage: &mut Stage) -> Result<(), WorkerError> {
         stage.ops_count.inc(1);
         Ok(())
     }

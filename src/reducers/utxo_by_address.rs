@@ -5,12 +5,11 @@ use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use pallas::crypto::hash::Hash;
 use pallas::ledger::addresses::{Address, StakeAddress};
-use pallas::ledger::primitives::alonzo::PolicyId;
 use pallas::ledger::traverse::{MultiEraAsset, MultiEraOutput};
-use pallas::ledger::traverse::{MultiEraBlock, MultiEraTx, OutputRef};
+use pallas::ledger::traverse::{MultiEraBlock, OutputRef};
 use serde::{Deserialize, Serialize};
 
-use gasket::messaging::tokio::{InputPort, OutputPort};
+use gasket::messaging::tokio::OutputPort;
 use tokio::sync::Mutex;
 
 use crate::crosscut::policies::AppliesPolicy;

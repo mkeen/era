@@ -49,14 +49,14 @@ impl Bootstrapper {
         }
     }
 
-    pub fn borrow_blocks(mut self) -> Option<Arc<Mutex<crosscut::historic::BufferBlocks>>> {
+    pub fn borrow_blocks(self) -> Option<Arc<Mutex<crosscut::historic::BufferBlocks>>> {
         match self {
             Bootstrapper::N2N(s) => Some(s.blocks),
-            Bootstrapper::UTXORPC(s) => None,
+            Bootstrapper::UTXORPC(_) => None,
         }
     }
 
-    pub fn spawn_stage(mut self, pipeline: &pipeline::Pipeline) -> Tether {
+    pub fn spawn_stage(self, pipeline: &pipeline::Pipeline) -> Tether {
         match self {
             Bootstrapper::N2N(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),
             Bootstrapper::UTXORPC(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),

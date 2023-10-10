@@ -1,12 +1,11 @@
 use std::convert::TryInto;
-use std::sync::{Arc, Mutex};
 
 use pallas::{
     codec::Fragment,
     network::miniprotocols::{chainsync, Point},
 };
 
-use crate::{crosscut, storage, Error};
+use crate::{crosscut, storage};
 
 #[inline]
 pub async fn define_chainsync_start<C: Fragment>(

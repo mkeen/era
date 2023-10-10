@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use async_trait;
-use futures::future::join_all;
 use pallas::{ledger::traverse::MultiEraBlock, network::miniprotocols::Point};
 use tokio::sync::Mutex;
 
@@ -149,7 +148,7 @@ pub struct Stage {
 
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Worker {
-    async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
+    async fn bootstrap(_: &Stage) -> Result<Self, WorkerError> {
         Ok(Self {})
     }
 

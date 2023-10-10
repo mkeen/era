@@ -57,11 +57,7 @@ coin_key_prefix = "c"
 type = "MultiAssetBalances"
 
 [intersect]
-type = "Point"
-value = [
-    76066702,
-    "9e1a6284f0ff3bd59cabb2eac9feef4acefe8cd10c5b63825dfdea79f65bfcea",
-]
+type = "Origin"
 
 [policy]
 missing_data = "Skip"

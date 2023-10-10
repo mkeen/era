@@ -1,5 +1,5 @@
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::{str::FromStr, time::Duration};
 
 use gasket::framework::*;
 use gasket::messaging::tokio::InputPort;

@@ -123,6 +123,7 @@ async fn apply_batch(batch: Batch, client: &Elasticsearch) -> Result<(), gasket:
             result
                 .map(|x| x.error_for_status_code())
                 .map_err(|e| Error::StorageError(e.to_string()))
+                .unwrap()
                 .unwrap();
         }
     }

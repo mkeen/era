@@ -1,5 +1,4 @@
 use gasket::framework::*;
-use std::time::Duration;
 
 use gasket::messaging::tokio::{InputPort, OutputPort};
 
@@ -12,7 +11,6 @@ use serde::Deserialize;
 use sled::IVec;
 
 use crate::{
-    crosscut,
     model::{self, BlockContext, EnrichedBlockPayload, RawBlockPayload},
     pipeline,
 };
@@ -132,7 +130,7 @@ impl Worker {
 
         let batch_results = db.apply_batch(insert_batch).or_retry();
 
-        batch_results.map_err(crate::Error::storage);
+        batch_results.map_err(crate::Error::storage).unwrap();
 
         Ok(produced)
     }
@@ -405,7 +403,8 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                     Ok(())
                 }
-            };
+            }
+            .unwrap();
         }
 
         Ok(())

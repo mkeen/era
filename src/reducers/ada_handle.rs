@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use pallas::ledger::addresses::{Address, StakeAddress};
-use pallas::ledger::traverse::MultiEraOutput;
 use pallas::ledger::traverse::{MultiEraAsset, MultiEraBlock};
 use serde::Deserialize;
 
@@ -35,14 +34,14 @@ pub struct Reducer {
 
 impl Reducer {
     fn to_string_output(&self, asset: MultiEraAsset) -> Option<String> {
-        if let policy_id = hex::encode(asset.policy()) {
-            if policy_id.eq(self.config.policy_id.clone().unwrap().as_str()) {
-                if let MultiEraAsset::AlonzoCompatibleOutput(_, name, _) = asset {
-                    return match std::str::from_utf8(name) {
-                        Ok(a) => Some(a.to_string()),
-                        Err(_) => None,
-                    };
-                }
+        let policy_id = hex::encode(asset.policy());
+
+        if policy_id.eq(self.config.policy_id.clone().unwrap().as_str()) {
+            if let MultiEraAsset::AlonzoCompatibleOutput(_, name, _) = asset {
+                return match std::str::from_utf8(name) {
+                    Ok(a) => Some(a.to_string()),
+                    Err(_) => None,
+                };
             }
         }
 
@@ -99,7 +98,8 @@ impl Reducer {
                                 )
                                 .into(),
                             )
-                            .await;
+                            .await
+                            .unwrap();
 
                             out.send(
                                 model::CRDTCommand::any_write_wins(
@@ -111,7 +111,8 @@ impl Reducer {
                                 )
                                 .into(),
                             )
-                            .await;
+                            .await
+                            .unwrap();
                         }
                     }
                 }

@@ -1,7 +1,7 @@
 [package]
 name = "era"
 description = "Hydrate a high-level, real-time, read-optimized cache of Cardano on-chain state with Era"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 repository = "https://github.com/mkeen/era"
 homepage = "https://github.com/mkeen/era"

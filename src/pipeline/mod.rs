@@ -29,7 +29,7 @@ impl gasket::framework::Worker<Stage> for Pipeline {
 
         let mut pipe = Self {
             policy: Policy {
-                tick_timeout: Some(Duration::from_secs(3)),
+                tick_timeout: None,
                 bootstrap_retry: retries::Policy::default(),
                 work_retry: retries::Policy::default(),
                 teardown_retry: retries::Policy::default(),
@@ -44,14 +44,12 @@ impl gasket::framework::Worker<Stage> for Pipeline {
         let enrich_input_port = enrich_stage.borrow_input_port();
 
         let storage = stage.storage_config.clone().unwrap();
-
         let mut storage_stage = storage
             .clone()
             .bootstrapper(stage.ctx.clone().unwrap().block)
             .unwrap();
 
         let source = stage.sources_config.clone().unwrap();
-
         let mut source_stage = source
             .clone()
             .bootstrapper(
@@ -80,7 +78,7 @@ impl gasket::framework::Worker<Stage> for Pipeline {
     }
 
     async fn schedule(&mut self, stage: &mut Stage) -> Result<WorkSchedule<()>, WorkerError> {
-        std::thread::sleep(Duration::from_secs(1));
+        std::thread::sleep(Duration::from_millis(100));
         Ok(WorkSchedule::Unit(()))
     }
 

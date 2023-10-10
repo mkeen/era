@@ -59,7 +59,6 @@ fn asset_fingerprint(data_list: [&str; 2]) -> Result<String, bech32::Error> {
 #[derive(Clone)]
 pub struct Reducer {
     config: Config,
-    chain: crosscut::ChainWellKnownInfo,
     time: crosscut::time::NaiveProvider,
 }
 
@@ -164,7 +163,8 @@ impl Reducer {
                                 )
                                 .into(),
                             )
-                            .await;
+                            .await
+                            .unwrap();
                     }
                 }
 
@@ -176,7 +176,8 @@ impl Reducer {
                         )
                         .into(),
                     )
-                    .await;
+                    .await
+                    .unwrap();
             }
         }
 
@@ -192,7 +193,8 @@ impl Reducer {
                             )
                             .into(),
                         )
-                        .await;
+                        .await
+                        .unwrap();
                 }
 
                 for (fingerprint, soas) in asset_to_owner {
@@ -208,7 +210,8 @@ impl Reducer {
                                         )
                                         .into(),
                                     )
-                                    .await;
+                                    .await
+                                    .unwrap();
                             }
                         }
                     }
@@ -236,7 +239,8 @@ impl Reducer {
             rollback,
             slot,
         )
-        .await;
+        .await
+        .unwrap();
 
         Ok(())
     }
@@ -253,16 +257,18 @@ impl Reducer {
             let spent_from_soa =
                 self.stake_or_address_from_address(&spent_output.address().unwrap());
 
-            return self
-                .process_asset_movement(
-                    output,
-                    &spent_from_soa,
-                    spent_output.lovelace_amount(),
-                    &spent_output.non_ada_assets(),
-                    !rollback,
-                    slot,
-                )
-                .await;
+            self.process_asset_movement(
+                output,
+                &spent_from_soa,
+                spent_output.lovelace_amount(),
+                &spent_output.non_ada_assets(),
+                !rollback,
+                slot,
+            )
+            .await
+            .unwrap();
+
+            return Ok(());
         }
 
         Ok(())
@@ -282,11 +288,15 @@ impl Reducer {
 
         for tx in block.txs() {
             for consumes in tx.consumes().iter() {
-                self.process_spent(out, consumes, ctx, slot, rollback);
+                self.process_spent(out, consumes, ctx, slot, rollback)
+                    .await
+                    .unwrap();
             }
 
             for (_, utxo_produced) in tx.produces().iter() {
-                self.process_received(out, utxo_produced, slot, rollback);
+                self.process_received(out, utxo_produced, slot, rollback)
+                    .await
+                    .unwrap();
             }
         }
 
@@ -298,7 +308,6 @@ impl Config {
     pub fn plugin(self, ctx: &Context) -> super::Reducer {
         let reducer = Reducer {
             config: self,
-            chain: ctx.chain.clone(),
             time: crosscut::time::NaiveProvider::new(ctx.chain.clone()),
         };
 

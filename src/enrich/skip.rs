@@ -59,7 +59,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                         cbor.clone(),
                         BlockContext::default(),
                     ))
-                    .await;
+                    .await
+                    .unwrap();
             }
             RawBlockPayload::RollBack(cbor, last_good_block_info_rollback) => {
                 stage
@@ -69,7 +70,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                         BlockContext::default(),
                         last_good_block_info_rollback.clone(),
                     ))
-                    .await;
+                    .await
+                    .unwrap();
             }
         };
 

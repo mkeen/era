@@ -7,7 +7,6 @@ use blake2::Blake2bVar;
 
 use pallas::codec::utils::KeyValuePairs;
 use pallas::ledger::primitives::alonzo::{Metadata, Metadatum, MetadatumLabel};
-use pallas::ledger::primitives::Fragment;
 use pallas::ledger::traverse::MultiEraBlock;
 
 use gasket::messaging::tokio::OutputPort;
@@ -183,9 +182,9 @@ impl Reducer {
 
     async fn extract_and_aggregate_cip_metadata(
         &self,
-        output: &mut OutputPort<CRDTCommand>,
+        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
         cip: u64,
-        policy_map: &Metadatum,
+        policy_map: Metadatum,
         policy_id_str: String,
         asset_name_str: String,
         slot_no: u64,
@@ -193,9 +192,6 @@ impl Reducer {
         prefix: &str,
         royalty_prefix: &str,
     ) -> Option<()> {
-        let prefix = self.config.key_prefix.as_deref().unwrap_or("m");
-        let royalty_prefix = self.config.royalty_key_prefix.as_deref().unwrap_or("m.r");
-
         if let Some(policy_assets) = self.find_metadata_policy_assets(&policy_map, &policy_id_str) {
             let filtered_policy_assets = policy_assets.iter().find(|(l, _)| {
                 let asset_label = self.get_asset_label(l.clone()).unwrap();
@@ -222,76 +218,73 @@ impl Reducer {
                         cip,
                     );
 
+                    let mut out = output.lock().await;
+
                     if !meta_payload.is_empty() {
                         if cip == CIP27_META_ROYALTIES {
                             if !rollback {
-                                output
-                                    .send(
-                                        CRDTCommand::last_write_wins(
-                                            Some(&royalty_prefix),
-                                            &policy_id_str,
-                                            meta_payload,
-                                            timestamp,
-                                        )
-                                        .into(),
-                                    )
-                                    .await
-                                    .unwrap();
-                            } else {
-                                output
-                                    .send(
-                                        CRDTCommand::sorted_set_remove(
-                                            Some(&royalty_prefix),
-                                            &policy_id_str,
-                                            meta_payload,
-                                            Delta::from(timestamp as i64),
-                                        )
-                                        .into(),
-                                    )
-                                    .await
-                                    .unwrap();
-                            }
-                        } else {
-                            if !rollback {
-                                output
-                                    .send(
-                                        CRDTCommand::last_write_wins(
-                                            Some(&prefix),
-                                            &fingerprint_str,
-                                            meta_payload,
-                                            timestamp,
-                                        )
-                                        .into(),
-                                    )
-                                    .await
-                                    .unwrap();
-                            } else {
-                                output
-                                    .send(
-                                        CRDTCommand::sorted_set_remove(
-                                            Some(&prefix),
-                                            &fingerprint_str,
-                                            meta_payload,
-                                            timestamp as i64,
-                                        )
-                                        .into(),
-                                    )
-                                    .await
-                                    .unwrap();
-                            }
-
-                            output
-                                .send(
+                                out.send(
                                     CRDTCommand::last_write_wins(
-                                        Some(&prefix),
+                                        Some(&royalty_prefix),
                                         &policy_id_str,
-                                        fingerprint_str,
+                                        meta_payload,
                                         timestamp,
                                     )
                                     .into(),
                                 )
                                 .await
                                 .unwrap();
+                            } else {
+                                out.send(
+                                    CRDTCommand::sorted_set_remove(
+                                        Some(&royalty_prefix),
+                                        &policy_id_str,
+                                        meta_payload,
+                                        Delta::from(timestamp as i64),
+                                    )
+                                    .into(),
+                                )
+                                .await
+                                .unwrap();
+                            }
+                        } else {
+                            if !rollback {
+                                out.send(
+                                    CRDTCommand::last_write_wins(
+                                        Some(&prefix),
+                                        &fingerprint_str,
+                                        meta_payload,
+                                        timestamp,
+                                    )
+                                    .into(),
+                                )
+                                .await
+                                .unwrap();
+                            } else {
+                                out.send(
+                                    CRDTCommand::sorted_set_remove(
+                                        Some(&prefix),
+                                        &fingerprint_str,
+                                        meta_payload,
+                                        timestamp as i64,
+                                    )
+                                    .into(),
+                                )
+                                .await
+                                .unwrap();
+                            }
+
+                            out.send(
+                                CRDTCommand::last_write_wins(
+                                    Some(&prefix),
+                                    &policy_id_str,
+                                    fingerprint_str,
+                                    timestamp,
+                                )
+                                .into(),
+                            )
+                            .await
+                            .unwrap();
                         }
                     }
                 }
@@ -310,47 +303,38 @@ impl Reducer {
     ) -> Result<(), gasket::error::Error> {
         let prefix = self.config.key_prefix.as_deref().unwrap_or("m");
         let royalty_prefix = self.config.royalty_key_prefix.as_deref().unwrap_or("m.r");
-        let out = &mut output.lock().await;
+
+        let mut operations = Vec::new();
 
         for tx in block.txs() {
-            if tx.metadata().as_alonzo().iter().any(|meta| {
-                meta.iter()
-                    .any(|(key, _)| *key == CIP25_META_NFT || *key == CIP27_META_ROYALTIES)
-            }) {
-                let metadata = tx.metadata();
+            for asset_group in tx.mints() {
+                for multi_asset in asset_group.assets() {
+                    let policy_id_str = hex::encode(multi_asset.policy());
+                    if let Some(quantity) = multi_asset.mint_coin() {
+                        let asset_name_str = match String::from_utf8(multi_asset.name().to_vec()) {
+                            Ok(asset_name) => asset_name,
+                            Err(_) => hex::encode(multi_asset.name()),
+                        };
 
-                for asset_group in tx.mints() {
-                    for multi_asset in asset_group.assets() {
-                        let policy_id_str = hex::encode(multi_asset.policy());
-                        if let Some(quantity) = multi_asset.mint_coin() {
-                            let asset_name_str =
-                                match String::from_utf8(multi_asset.name().to_vec()) {
-                                    Ok(asset_name) => asset_name,
-                                    Err(_) => hex::encode(multi_asset.name()),
-                                };
-
-                            if !policy_id_str.is_empty() {
-                                for supported_metadata_cip in
-                                    vec![CIP25_META_NFT, CIP27_META_ROYALTIES]
+                        if !policy_id_str.is_empty() {
+                            for supported_metadata_cip in vec![CIP25_META_NFT, CIP27_META_ROYALTIES]
+                            {
+                                if let Some(policy_map) = tx
+                                    .metadata()
+                                    .find(MetadatumLabel::from(supported_metadata_cip))
                                 {
-                                    if let Some(policy_map) =
-                                        metadata.find(MetadatumLabel::from(supported_metadata_cip))
-                                    {
-                                        if quantity > -1 {
-                                            self.extract_and_aggregate_cip_metadata(
-                                                out,
-                                                supported_metadata_cip,
-                                                policy_map,
-                                                policy_id_str.to_owned(),
-                                                asset_name_str.to_owned(),
-                                                block.slot().to_owned(),
-                                                rollback,
-                                                prefix,
-                                                royalty_prefix,
-                                            )
-                                            .await
-                                            .unwrap()
-                                        }
+                                    if quantity > -1 {
+                                        operations.push(self.extract_and_aggregate_cip_metadata(
+                                            output,
+                                            supported_metadata_cip,
+                                            policy_map.clone(),
+                                            policy_id_str.clone(),
+                                            asset_name_str.clone(),
+                                            block.slot().clone(),
+                                            rollback,
+                                            prefix,
+                                            royalty_prefix,
+                                        ));
                                     }
                                 }
                             }
@@ -358,6 +342,13 @@ impl Reducer {
                     }
                 }
             }
+        }
+
+        for o in futures::future::join_all(operations).await {
+            match o {
+                None => None,
+                Some(r) => Some(r),
+            };
         }
 
         Ok(())
