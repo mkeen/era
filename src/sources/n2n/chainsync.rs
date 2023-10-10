@@ -131,8 +131,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                 Ok(next) => {
                     let mut blocks_client = stage.blocks.lock().await;
 
-                    let mut to_fetch: Vec<RawBlockPayload> = vec![];
-
                     match next {
                         NextResponse::RollForward(h, t) => {
                             stage.chain_tip.set(t.1 as i64);
@@ -205,6 +203,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                                     }
                                 } else {
                                     if let Some(rollback_cbor) = pop_rollback_block {
+                                        stage.chain_tip.set(0 as i64);
+
                                         blocks.push(RawBlockPayload::RollBack(
                                             rollback_cbor.clone(),
                                             (Point::Origin, 0),

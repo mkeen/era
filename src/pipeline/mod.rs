@@ -78,7 +78,6 @@ impl gasket::framework::Worker<Stage> for Pipeline {
     }
 
     async fn schedule(&mut self, stage: &mut Stage) -> Result<WorkSchedule<()>, WorkerError> {
-        std::thread::sleep(Duration::from_millis(1000));
         Ok(WorkSchedule::Unit(()))
     }
 
