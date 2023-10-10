@@ -158,7 +158,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                                 Err(_) => {}
                             }
 
-                            for _ in 1..500000 {
+                            for _ in 1..5000 {
                                 match peer.chainsync.request_next().await.or_restart() {
                                     Ok(next) => match next {
                                         NextResponse::RollForward(h1, t1) => {
