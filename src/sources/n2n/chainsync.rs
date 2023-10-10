@@ -48,9 +48,8 @@ pub struct Stage {
 
     #[metric]
     pub chain_tip: gasket::metrics::Gauge,
-
-    #[metric]
-    pub last_block: gasket::metrics::Gauge,
+    //#[metric]
+    //pub last_block: gasket::metrics::Gauge,
 }
 
 #[async_trait::async_trait(?Send)]
