@@ -1,7 +1,7 @@
 [source]
 type = "N2N"
 address = "127.0.0.1:3001"
-min_depth = 10
+min_depth = 1000
 
 # [source]
 # type = "UTXORPC"
