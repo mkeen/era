@@ -1,9 +1,10 @@
 pub mod chainsync;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use pallas::network::miniprotocols::Point;
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
 use crate::{crosscut, pipeline, storage::Cursor};
 
@@ -44,13 +45,11 @@ impl Config {
             config: self,
             output: Default::default(),
             chain_tip: Default::default(),
-            block_count: Default::default(),
             intersect: ctx.intersect.clone(),
             chain: ctx.chain.clone(),
             finalize: ctx.finalize.clone(),
             cursor,
             blocks,
-            busy: false,
         }
     }
 }

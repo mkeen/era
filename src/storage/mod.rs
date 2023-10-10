@@ -4,10 +4,11 @@ pub mod skip;
 #[cfg(feature = "elastic")]
 pub mod elastic;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use gasket::{messaging::tokio::InputPort, runtime::Tether};
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
 use crate::{
     crosscut::{self, PointArg},

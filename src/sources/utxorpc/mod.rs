@@ -74,7 +74,7 @@ impl Worker {
                                 .await
                                 .unwrap();
 
-                            stage.chain_tip.set(block.slot() as i64);
+                            //stage.chain_tip.set(block.slot() as i64);
                         }
                     }
                 }

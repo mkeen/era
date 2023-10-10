@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use elasticsearch::Elasticsearch;
 
@@ -11,6 +11,7 @@ use gasket::messaging::tokio::InputPort;
 
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
+use tokio::sync::Mutex;
 
 use crate::{
     crosscut,

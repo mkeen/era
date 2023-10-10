@@ -1,7 +1,8 @@
-use crate::Error;
+use crate::{model::RawBlockPayload, Error};
 use gasket::framework::AsWorkError;
 use pallas::network::miniprotocols::Point;
 use serde::{Deserialize, Serialize};
+use std::mem;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -29,7 +30,8 @@ impl From<BlockConfig> for BufferBlocks {
 pub struct BufferBlocks {
     pub config: BlockConfig,
     db: Option<sled::Db>,
-    queue: Vec<(String, Vec<u8>)>,
+    queue: Vec<(String, Vec<u8>)>, //rollback queue.. badly named todo rename
+    buffer: Vec<RawBlockPayload>,
 }
 
 fn to_zero_padded_string(point: &Point) -> String {
@@ -38,6 +40,7 @@ fn to_zero_padded_string(point: &Point) -> String {
         Point::Specific(_, block_hash) => String::from(hex::encode(block_hash)),
     };
 
+    // This is needed so that the strings stored in jsonb will be ordered properly when they contain integers (zero padding)
     return format!(
         "{:0>width$}{}",
         point.slot_or_default(),
@@ -55,7 +58,27 @@ impl BufferBlocks {
             config,
             db: Some(db),
             queue,
+            buffer: Default::default(),
         }
+    }
+
+    pub async fn block_mem_add(&mut self, block_msg_payload: RawBlockPayload) -> () {
+        self.buffer.insert(0, block_msg_payload.to_owned());
+        ()
+    }
+
+    // When popping, you are getting the oldest item in list (thanks to insert above)
+    pub async fn block_mem_take_all(&mut self) -> Option<Vec<RawBlockPayload>> {
+        let empty: Vec<RawBlockPayload> = vec![];
+        let blocks = mem::replace(&mut self.buffer, empty);
+        match blocks.is_empty() {
+            true => None,
+            false => Some(blocks),
+        }
+    }
+
+    pub async fn block_mem_size(&self) -> usize {
+        self.buffer.len()
     }
 
     fn get_db_ref(&self) -> &sled::Db {

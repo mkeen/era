@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use gasket::messaging::tokio::OutputPort;
@@ -11,6 +11,7 @@ use pallas::network::miniprotocols::chainsync::{
 use pallas::network::miniprotocols::Point;
 
 use gasket::framework::*;
+use tokio::sync::Mutex;
 
 use crate::model::RawBlockPayload;
 use crate::{crosscut, model, sources, storage, Error};
@@ -43,15 +44,10 @@ pub struct Stage {
     pub blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
     pub finalize: Option<crosscut::FinalizeConfig>,
 
-    pub busy: bool,
-
     pub output: OutputPort<RawBlockPayload>,
 
     #[metric]
     pub chain_tip: gasket::metrics::Gauge,
-
-    #[metric]
-    pub block_count: gasket::metrics::Counter,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -121,17 +117,21 @@ impl gasket::framework::Worker<Stage> for Worker {
     ) -> Result<WorkSchedule<Vec<RawBlockPayload>>, WorkerError> {
         let peer = self.peer.as_mut().unwrap();
 
-        std::thread::sleep(Duration::from_millis(1000));
-        log::warn!("requesting next block");
+        async fn flush_blocks_to_worker(
+            blocks_client: &mut crosscut::historic::BufferBlocks,
+        ) -> Vec<RawBlockPayload> {
+            match blocks_client.block_mem_take_all().await {
+                Some(blocks) => blocks,
+                None => vec![],
+            }
+        }
 
         Ok(WorkSchedule::Unit(match peer.chainsync.has_agency() {
             true => match peer.chainsync.request_next().await.or_restart() {
                 Ok(next) => {
-                    let mut blocks = vec![];
+                    let mut blocks_client = stage.blocks.lock().await;
 
-                    let mut blocks_client = stage.blocks.lock().unwrap();
-
-                    let mut to_fetch = vec![];
+                    let mut to_fetch: Vec<RawBlockPayload> = vec![];
 
                     match next {
                         NextResponse::RollForward(h, t) => {
@@ -139,150 +139,45 @@ impl gasket::framework::Worker<Stage> for Worker {
                             let parsed_headers = to_traverse(&h);
                             match parsed_headers {
                                 Ok(parsed_headers) => {
-                                    to_fetch.push(parsed_headers);
-                                    // match peer
-                                    //     .blockfetch
-                                    //     .fetch_single(Point::Specific(
-                                    //         parsed_headers.slot(),
-                                    //         parsed_headers.hash().to_vec(),
-                                    //     ))
-                                    //     .await
-                                    // {
-                                    //     Ok(static_single) => {
-                                    //         blocks
-                                    //             .push(RawBlockPayload::RollForward(static_single));
-                                    //     }
-                                    //     Err(_) => {}
-                                    //}
-                                }
-                                Err(_) => {}
-                            }
-
-                            for _ in 1..5000 {
-                                match peer.chainsync.request_next().await.or_restart() {
-                                    Ok(next) => match next {
-                                        NextResponse::RollForward(h1, t1) => {
-                                            stage.chain_tip.set(t1.1 as i64);
-                                            let parsed_headers = to_traverse(&h1);
-                                            match parsed_headers {
-                                                Ok(parsed_headers) => {
-                                                    match peer
-                                                        .blockfetch
-                                                        .fetch_single(Point::Specific(
-                                                            parsed_headers.slot(),
-                                                            parsed_headers.hash().to_vec(),
-                                                        ))
-                                                        .await
-                                                    {
-                                                        Ok(static_single) => {
-                                                            blocks.push(
-                                                                RawBlockPayload::RollForward(
-                                                                    static_single,
-                                                                ),
-                                                            );
-                                                        }
-                                                        Err(_) => {
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                                Err(_) => {
-                                                    break;
-                                                }
-                                            }
-                                        }
-
-                                        NextResponse::RollBackward(p1, t1) => {
-                                            blocks_client.enqueue_rollback_batch(&p1);
-
-                                            loop {
-                                                let pop_rollback_block =
-                                                    blocks_client.rollback_pop();
-
-                                                if let Some(last_good_block) =
-                                                    blocks_client.get_block_latest()
-                                                {
-                                                    if let Ok(parsed_last_good_block) =
-                                                        MultiEraBlock::decode(&last_good_block)
-                                                    {
-                                                        let last_good_point = Point::Specific(
-                                                            parsed_last_good_block.slot(),
-                                                            parsed_last_good_block.hash().to_vec(),
-                                                        );
-
-                                                        stage
-                                                            .chain_tip
-                                                            .set(last_good_point.slot_or_default()
-                                                                as i64);
-
-                                                        if let Some(rollback_cbor) =
-                                                            pop_rollback_block
-                                                        {
-                                                            blocks.push(RawBlockPayload::RollBack(
-                                                                rollback_cbor.clone(),
-                                                                (
-                                                                    last_good_point,
-                                                                    parsed_last_good_block.number(),
-                                                                ),
-                                                            ));
-                                                        } else {
-                                                            break;
-                                                        }
-                                                    }
-                                                } else {
-                                                    if let Some(rollback_cbor) = pop_rollback_block
-                                                    {
-                                                        blocks.push(RawBlockPayload::RollBack(
-                                                            rollback_cbor.clone(),
-                                                            (Point::Origin, 0),
-                                                        ));
-                                                    } else {
-                                                        break;
-                                                    }
-                                                }
-                                            }
-
-                                            break;
-                                        }
-
-                                        NextResponse::Await => break,
-                                    },
-                                    Err(_) => break,
-                                }
-                            }
-
-                            match (to_fetch.first(), to_fetch.last()) {
-                                (Some(to_fetch_first), Some(to_fetch_last)) => {
                                     match peer
                                         .blockfetch
-                                        .fetch_range((
-                                            Point::Specific(
-                                                to_fetch_first.slot(),
-                                                to_fetch_first.hash().to_vec(),
-                                            ),
-                                            Point::Specific(
-                                                to_fetch_last.slot(),
-                                                to_fetch_last.hash().to_vec(),
-                                            ),
+                                        .fetch_single(Point::Specific(
+                                            parsed_headers.slot(),
+                                            parsed_headers.hash().to_vec(),
                                         ))
                                         .await
                                     {
-                                        Ok(incoming_blocks) => {
-                                            for block in incoming_blocks {
-                                                blocks.push(RawBlockPayload::RollForward(block));
+                                        Ok(static_single) => {
+                                            blocks_client
+                                                .block_mem_add(RawBlockPayload::RollForward(
+                                                    static_single,
+                                                ))
+                                                .await;
+
+                                            match blocks_client.block_mem_size().await
+                                                >= self.min_depth
+                                            {
+                                                true => {
+                                                    flush_blocks_to_worker(&mut blocks_client).await
+                                                }
+
+                                                false => {
+                                                    vec![]
+                                                }
                                             }
                                         }
-                                        Err(_) => {}
+                                        Err(_) => flush_blocks_to_worker(&mut blocks_client).await,
                                     }
                                 }
-
-                                _ => {}
-                            };
-
-                            blocks
+                                Err(_) => {
+                                    vec![]
+                                }
+                            }
                         }
 
                         NextResponse::RollBackward(p, t) => {
+                            let mut blocks = vec![];
+
                             blocks_client.enqueue_rollback_batch(&p);
 
                             loop {
@@ -296,6 +191,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                                             parsed_last_good_block.slot(),
                                             parsed_last_good_block.hash().to_vec(),
                                         );
+
+                                        stage.chain_tip.set(parsed_last_good_block.slot() as i64);
 
                                         if let Some(rollback_cbor) = pop_rollback_block {
                                             blocks.push(RawBlockPayload::RollBack(
@@ -321,7 +218,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                             blocks
                         }
 
-                        NextResponse::Await => blocks,
+                        NextResponse::Await => vec![],
                     }
                 }
                 Err(_) => {
@@ -334,8 +231,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                 match peer.chainsync.recv_while_must_reply().await.or_restart() {
                     Ok(n) => {
                         let mut blocks = vec![];
-
-                        let mut blocks_client = stage.blocks.lock().unwrap();
 
                         match n {
                             NextResponse::RollForward(h, t) => {
@@ -367,6 +262,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                             }
                             NextResponse::RollBackward(p, t) => {
                                 log::warn!("rolling back");
+                                let mut blocks_client = stage.blocks.lock().await;
 
                                 blocks_client.enqueue_rollback_batch(&p);
 

@@ -1,11 +1,12 @@
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::{str::FromStr, time::Duration};
 
 use gasket::framework::*;
 use gasket::messaging::tokio::InputPort;
 
 use redis::{Cmd, Commands, ConnectionLike, ToRedisArgs};
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
 use crate::model::{CRDTCommand, Member, Value};
 use crate::{crosscut, model};
@@ -303,11 +304,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .or_restart()?;
 
                 if !rollback {
-                    stage
-                        .blocks
-                        .lock()
-                        .unwrap()
-                        .insert_block(&point, &block_bytes);
+                    stage.blocks.lock().await.insert_block(&point, &block_bytes);
                 }
             }
         };

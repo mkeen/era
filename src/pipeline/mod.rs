@@ -43,13 +43,13 @@ impl gasket::framework::Worker<Stage> for Pipeline {
 
         let enrich_input_port = enrich_stage.borrow_input_port();
 
-        let storage = stage.storage_config.clone().unwrap();
+        let storage = stage.storage_config.as_ref().unwrap();
         let mut storage_stage = storage
             .clone()
             .bootstrapper(stage.ctx.clone().unwrap().block)
             .unwrap();
 
-        let source = stage.sources_config.clone().unwrap();
+        let source = stage.sources_config.as_ref().unwrap();
         let mut source_stage = source
             .clone()
             .bootstrapper(
@@ -60,7 +60,7 @@ impl gasket::framework::Worker<Stage> for Pipeline {
             .unwrap();
 
         let mut reducer = reducers::worker::bootstrap(
-            &stage.ctx.as_ref().unwrap().clone(),
+            &stage.ctx.as_ref().unwrap(),
             stage.reducer_config.clone().unwrap(),
             storage_stage.borrow_input_port(),
         )
@@ -78,12 +78,12 @@ impl gasket::framework::Worker<Stage> for Pipeline {
     }
 
     async fn schedule(&mut self, stage: &mut Stage) -> Result<WorkSchedule<()>, WorkerError> {
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(1000));
         Ok(WorkSchedule::Unit(()))
     }
 
     async fn execute(&mut self, _: &(), stage: &mut Stage) -> Result<(), WorkerError> {
-        console::refresh(&stage.args_console, self);
+        console::refresh(&stage.args_console, self).await;
         Ok(())
     }
 }

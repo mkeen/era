@@ -1,8 +1,9 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use gasket::framework::*;
 use gasket::messaging::tokio::InputPort;
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
 use crate::{crosscut, model::CRDTCommand};
 

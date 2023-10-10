@@ -1,11 +1,14 @@
 use std::{
-    sync::Mutex,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
-use gasket::metrics::Reading;
+use futures::FutureExt;
+use gasket::{metrics::Reading, runtime::Tether};
 use lazy_static::{__Deref, lazy_static};
 use log::Log;
+use tokio::sync::{oneshot, Mutex};
+use tokio::time::timeout;
 
 #[derive(clap::ValueEnum, Clone)]
 pub enum Mode {
@@ -72,28 +75,31 @@ impl TuiConsole {
         }
     }
 
-    fn refresh(&self, pipeline: &super::Pipeline) {
+    async fn refresh(&self, pipeline: &super::Pipeline) -> Option<()> {
         for tether in pipeline.tethers.iter() {
+            log::warn!("in tether {}", tether.name());
+
             let state = match tether.check_state() {
                 gasket::runtime::TetherState::Dropped => "dropped!",
-                gasket::runtime::TetherState::Blocked(_) => "blocked!",
+                gasket::runtime::TetherState::Blocked(_) => "blocked",
                 gasket::runtime::TetherState::Alive(x) => match x {
                     gasket::runtime::StagePhase::Bootstrap => "bootstrapping...",
-                    gasket::runtime::StagePhase::Working => "working...",
+                    gasket::runtime::StagePhase::Working => "working",
                     gasket::runtime::StagePhase::Teardown => "tearing down...",
                     gasket::runtime::StagePhase::Ended => "ended...",
                 },
             };
+
+            if state == "blocked" {
+                log::warn!("{} is blocked", tether.name());
+            }
 
             match tether.read_metrics() {
                 Ok(readings) => {
                     for (key, value) in readings {
                         match (tether.name(), key, value) {
                             (_, "chain_tip", Reading::Gauge(x)) => {
-                                // todo look into why this is flickering to 0 constantly without this check...dbg!()
-                                if x > 0 {
-                                    self.chainsync_progress.set_length(x as u64);
-                                }
+                                self.chainsync_progress.set_length(x as u64);
                             }
                             (_, "last_block", Reading::Gauge(x)) => {
                                 self.chainsync_progress.set_position(x as u64);
@@ -138,8 +144,10 @@ impl TuiConsole {
                     log::warn!("couldn't read metrics");
                     dbg!(err);
                 }
-            }
+            };
         }
+
+        None
     }
 }
 
@@ -167,11 +175,11 @@ impl PlainConsole {
         }
     }
 
-    fn refresh(&self, pipeline: &super::Pipeline) {
-        let mut last_report = self.last_report.lock().unwrap();
+    async fn refresh(&self, pipeline: &super::Pipeline) -> Option<()> {
+        let mut last_report = self.last_report.lock().await;
 
         if last_report.elapsed() <= Duration::from_secs(10) {
-            return;
+            return None;
         }
 
         for tether in pipeline.tethers.iter() {
@@ -202,6 +210,8 @@ impl PlainConsole {
         }
 
         *last_report = Instant::now();
+
+        None
     }
 }
 
@@ -222,9 +232,9 @@ pub fn initialize(mode: &Option<Mode>) {
     }
 }
 
-pub fn refresh(mode: &Option<Mode>, pipeline: &super::Pipeline) {
+pub async fn refresh(mode: &Option<Mode>, pipeline: &super::Pipeline) -> Option<()> {
     match mode {
-        Some(Mode::TUI) => TUI_CONSOLE.refresh(pipeline),
-        _ => PLAIN_CONSOLE.refresh(pipeline),
+        Some(Mode::TUI) => TUI_CONSOLE.refresh(pipeline).await,
+        _ => PLAIN_CONSOLE.refresh(pipeline).await,
     }
 }

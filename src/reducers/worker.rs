@@ -112,7 +112,6 @@ pub async fn bootstrap(
         reducers: reducers.into_iter().map(|x| x.bootstrapper(&ctx)).collect(),
         input: Default::default(),
         output: Arc::new(Mutex::new(output)),
-        chain_tip: Default::default(),
         ops_count: Default::default(),
         last_block: Default::default(),
         error_policy: ctx.error_policy.clone(),
@@ -135,9 +134,6 @@ pub struct Stage {
 
     pub input: InputPort<EnrichedBlockPayload>,
     pub output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-
-    #[metric]
-    chain_tip: gasket::metrics::Gauge,
 
     #[metric]
     ops_count: gasket::metrics::Counter,
@@ -185,6 +181,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                 );
             }
             model::EnrichedBlockPayload::RollBack(block, ctx, last_block_rollback_info) => {
+                log::warn!("rolling back");
                 stage.last_block.set(
                     self.reduce_block(
                         &block,
