@@ -160,6 +160,10 @@ impl gasket::framework::Worker<Stage> for Worker {
                                                 }
 
                                                 false => {
+                                                    log::warn!(
+                                                        "block buffer size {}",
+                                                        blocks_client.block_mem_size().await
+                                                    );
                                                     vec![]
                                                 }
                                             }
