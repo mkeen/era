@@ -1,7 +1,6 @@
 pub mod console;
 
 use crate::{crosscut, enrich, reducers, sources, storage};
-use std::time::Duration;
 
 use gasket::{
     framework::*,
