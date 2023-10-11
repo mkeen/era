@@ -25,6 +25,9 @@ assets = [
     ["config.toml", "etc/era/config.toml", "644"]
 ]
 
+[dev-dependencies]
+cargo-deb = "1.44.1"
+
 [dependencies]
 pallas = "0.19.1"
 hex = "0.4.3"
