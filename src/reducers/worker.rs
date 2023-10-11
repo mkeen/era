@@ -61,9 +61,9 @@ impl Worker {
 
         if rollback {
             log::warn!(
-                "rolling back {}@{}",
+                "rolling back {}.{}",
+                block_parsed.slot(),
                 block_parsed.hash().to_string(),
-                block_parsed.slot()
             );
         }
 
@@ -181,7 +181,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                 );
             }
             model::EnrichedBlockPayload::RollBack(block, ctx, last_block_rollback_info) => {
-                log::warn!("rolling back");
                 stage.last_block.set(
                     self.reduce_block(
                         &block,
