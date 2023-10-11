@@ -120,7 +120,7 @@ impl gasket::framework::Worker<Stage> for Worker {
     ) -> Result<WorkSchedule<Vec<RawBlockPayload>>, WorkerError> {
         let peer = self.peer.as_mut().unwrap();
 
-        async fn flush_blocks_to_worker(
+        async fn flush_buffered_blocks(
             blocks_client: &mut crosscut::historic::BufferBlocks,
         ) -> Vec<RawBlockPayload> {
             match blocks_client.block_mem_take_all().await {
@@ -159,19 +159,15 @@ impl gasket::framework::Worker<Stage> for Worker {
                                                 >= self.min_depth
                                             {
                                                 true => {
-                                                    flush_blocks_to_worker(&mut blocks_client).await
+                                                    flush_buffered_blocks(&mut blocks_client).await
                                                 }
 
                                                 false => {
-                                                    log::warn!(
-                                                        "block buffer size {}",
-                                                        blocks_client.block_mem_size().await
-                                                    );
                                                     vec![]
                                                 }
                                             }
                                         }
-                                        Err(_) => flush_blocks_to_worker(&mut blocks_client).await,
+                                        Err(_) => flush_buffered_blocks(&mut blocks_client).await,
                                     }
                                 }
                                 Err(_) => {
@@ -181,7 +177,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                         }
 
                         NextResponse::RollBackward(p, t) => {
-                            let mut blocks = vec![];
+                            let mut blocks = flush_buffered_blocks(&mut blocks_client).await;
 
                             blocks_client.enqueue_rollback_batch(&p);
 
