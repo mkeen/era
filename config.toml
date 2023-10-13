@@ -1,6 +1,11 @@
+# [source]
+# type = "N2N"
+# address = "127.0.0.1:3001"
+# min_depth = 10
+
 [source]
-type = "N2N"
-address = "127.0.0.1:3001"
+type = "N2C"
+path = "/tmp/run/node.socket"
 min_depth = 10
 
 # [source]

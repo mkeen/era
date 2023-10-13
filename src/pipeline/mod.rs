@@ -54,7 +54,7 @@ impl gasket::framework::Worker<Stage> for Pipeline {
             .bootstrapper(
                 &stage.ctx.clone().unwrap(),
                 storage_stage.build_cursor(),
-                Some(storage_stage.borrow_blocks()),
+                storage_stage.borrow_blocks(),
             )
             .unwrap();
 
