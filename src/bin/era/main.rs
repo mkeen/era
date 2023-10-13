@@ -11,7 +11,8 @@ enum Era {
     Daemon(daemon::Args),
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Era::parse();
 
     let result = match args {
@@ -21,6 +22,10 @@ fn main() {
     if let Err(err) = &result {
         eprintln!("ERROR: {:#?}", err);
         process::exit(1);
+    } else {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
     }
 
     process::exit(0);

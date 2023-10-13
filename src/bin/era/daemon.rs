@@ -93,11 +93,6 @@ pub fn run(args: &Args) -> Result<(), era::Error> {
         Default::default(), // todo dont use default policy
     );
 
-    // manage keep alive elsewhere
-    while true {
-        std::thread::sleep(Duration::from_millis(1000));
-    }
-
     Ok(())
 }
 
