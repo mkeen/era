@@ -195,7 +195,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                 log::info!("awaiting next block (blocking)");
                 match peer.chainsync.recv_while_must_reply().await.or_restart() {
                     Ok(n) => {
-                        let mut blocks = vec![];
+                        let mut blocks_client = stage.blocks.lock().await;
+                        let mut blocks = flush_buffered_blocks(&mut blocks_client).await;
 
                         match n {
                             NextResponse::RollForward(cbor, t) => {

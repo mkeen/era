@@ -229,91 +229,84 @@ impl gasket::framework::Worker<Stage> for Worker {
                     vec![]
                 }
             },
-            false => {
-                log::info!("awaiting next block (blocking)");
-                match peer.chainsync.recv_while_must_reply().await.or_restart() {
-                    Ok(n) => {
-                        let mut blocks = vec![];
+            false => match peer.chainsync.recv_while_must_reply().await.or_restart() {
+                Ok(n) => {
+                    let mut blocks_client = stage.blocks.lock().await;
+                    let mut blocks = flush_buffered_blocks(&mut blocks_client).await;
 
-                        match n {
-                            NextResponse::RollForward(h, t) => {
-                                log::warn!("rolling forward");
+                    match n {
+                        NextResponse::RollForward(h, t) => {
+                            log::warn!("rolling forward");
 
-                                let parsed_headers = to_traverse(&h);
-                                match parsed_headers {
-                                    Ok(parsed_headers) => {
-                                        match peer
-                                            .blockfetch
-                                            .fetch_single(Point::Specific(
-                                                parsed_headers.slot(),
-                                                parsed_headers.hash().to_vec(),
-                                            ))
-                                            .await
-                                        {
-                                            Ok(static_single) => {
-                                                blocks.push(RawBlockPayload::RollForward(
-                                                    static_single,
-                                                ));
-                                            }
-                                            Err(_) => {}
-                                        }
-                                    }
-                                    Err(_) => {}
-                                }
-
-                                blocks
-                            }
-                            NextResponse::RollBackward(p, t) => {
-                                log::warn!("rolling back");
-                                let mut blocks_client = stage.blocks.lock().await;
-
-                                blocks_client.enqueue_rollback_batch(&p);
-
-                                loop {
-                                    let pop_rollback_block = blocks_client.rollback_pop();
-
-                                    if let Some(last_good_block) = blocks_client.get_block_latest()
+                            let parsed_headers = to_traverse(&h);
+                            match parsed_headers {
+                                Ok(parsed_headers) => {
+                                    match peer
+                                        .blockfetch
+                                        .fetch_single(Point::Specific(
+                                            parsed_headers.slot(),
+                                            parsed_headers.hash().to_vec(),
+                                        ))
+                                        .await
                                     {
-                                        if let Ok(parsed_last_good_block) =
-                                            MultiEraBlock::decode(&last_good_block)
-                                        {
-                                            let last_good_point = Point::Specific(
-                                                parsed_last_good_block.slot(),
-                                                parsed_last_good_block.hash().to_vec(),
-                                            );
-
-                                            if let Some(rollback_cbor) = pop_rollback_block {
-                                                blocks.push(RawBlockPayload::RollBack(
-                                                    rollback_cbor.clone(),
-                                                    (
-                                                        last_good_point,
-                                                        parsed_last_good_block.number(),
-                                                    ),
-                                                ));
-                                            } else {
-                                                break;
-                                            }
+                                        Ok(static_single) => {
+                                            blocks
+                                                .push(RawBlockPayload::RollForward(static_single));
                                         }
-                                    } else {
+                                        Err(_) => {}
+                                    }
+                                }
+                                Err(_) => {}
+                            }
+
+                            blocks
+                        }
+                        NextResponse::RollBackward(p, t) => {
+                            log::warn!("rolling back");
+                            let mut blocks_client = stage.blocks.lock().await;
+
+                            blocks_client.enqueue_rollback_batch(&p);
+
+                            loop {
+                                let pop_rollback_block = blocks_client.rollback_pop();
+
+                                if let Some(last_good_block) = blocks_client.get_block_latest() {
+                                    if let Ok(parsed_last_good_block) =
+                                        MultiEraBlock::decode(&last_good_block)
+                                    {
+                                        let last_good_point = Point::Specific(
+                                            parsed_last_good_block.slot(),
+                                            parsed_last_good_block.hash().to_vec(),
+                                        );
+
                                         if let Some(rollback_cbor) = pop_rollback_block {
                                             blocks.push(RawBlockPayload::RollBack(
                                                 rollback_cbor.clone(),
-                                                (Point::Origin, 0),
+                                                (last_good_point, parsed_last_good_block.number()),
                                             ));
                                         } else {
                                             break;
                                         }
                                     }
+                                } else {
+                                    if let Some(rollback_cbor) = pop_rollback_block {
+                                        blocks.push(RawBlockPayload::RollBack(
+                                            rollback_cbor.clone(),
+                                            (Point::Origin, 0),
+                                        ));
+                                    } else {
+                                        break;
+                                    }
                                 }
-
-                                blocks
                             }
-                            NextResponse::Await => blocks,
+
+                            blocks
                         }
+                        NextResponse::Await => blocks,
                     }
-                    Err(_) => vec![],
                 }
-            }
+                Err(_) => vec![],
+            },
         }))
     }
 
