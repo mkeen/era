@@ -5,7 +5,7 @@
 
 [source]
 type = "N2C"
-path = "/tmp/run/node.socket"
+path = "/var/run/node.socket"
 min_depth = 10
 
 # [source]
