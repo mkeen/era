@@ -22,13 +22,18 @@ connection_params = "redis://127.0.0.1:6379/0"
 cursor_key = "_cursor"
 
 [[reducers]]
+type = "UtxoByAddress"
+key_prefix = "tx"
+coin_key_prefix = "c"
+
+[[reducers]]
 type = "AssetMetadata"
 projection = "Json"
 key_prefix = "m"
 royalty_key_prefix = "m.r"
-historical_metadata = true
-policy_asset_index = true
-royalty_metatada = true
+
+[[reducers]]
+type = "MultiAssetBalances"
 
 [[reducers]]
 type = "AdaHandle"
@@ -39,23 +44,18 @@ policy_id_hex = "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a"
 type = "PolicyAssetsMoved"
 key_prefix = "p"
 
-# This reflects the last block touched.. whether rolling forward or rolling back
 [[reducers]]
 type = "Parameters"
 key_prefix = "pr"
+
+[[reducers]]
+type = "StakeToPool"
+key_prefix = "p"
 
 # [[reducers]]
 # type = "UtxoOwners"
 # key_prefix = "tx"
 # coin_key_prefix = "c"
-
-[[reducers]]
-type = "UtxoByAddress"
-key_prefix = "tx"
-coin_key_prefix = "c"
-
-[[reducers]]
-type = "MultiAssetBalances"
 
 [intersect]
 type = "Origin"

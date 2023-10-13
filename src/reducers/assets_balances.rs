@@ -274,7 +274,7 @@ impl Reducer {
         Ok(())
     }
 
-    pub async fn reduce_block<'b>(
+    pub async fn reduce<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
@@ -311,6 +311,6 @@ impl Config {
             time: crosscut::time::NaiveProvider::new(ctx.chain.clone()),
         };
 
-        super::Reducer::MultiAssetBalances(reducer)
+        super::Reducer::AssetsBalances(reducer)
     }
 }

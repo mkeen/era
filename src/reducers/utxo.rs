@@ -331,7 +331,7 @@ impl Reducer {
         Ok(())
     }
 
-    pub async fn reduce_block<'b>(
+    pub async fn reduce<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
@@ -361,6 +361,6 @@ impl Config {
     pub fn plugin(self) -> super::Reducer {
         let reducer = Reducer { config: self };
 
-        super::Reducer::UtxoByAddress(reducer)
+        super::Reducer::Utxo(reducer)
     }
 }

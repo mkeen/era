@@ -104,7 +104,7 @@ impl Reducer {
         None
     }
 
-    pub async fn reduce_block<'b>(
+    pub async fn reduce<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,

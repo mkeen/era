@@ -20,7 +20,7 @@ pub struct Reducer {
 }
 
 impl Reducer {
-    pub async fn reduce_block<'b>(
+    pub async fn reduce<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
         rollback: bool,

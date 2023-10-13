@@ -43,7 +43,7 @@ impl Reducer {
         CRDTCommand::spoil(self.config.key_prefix.as_deref(), &key)
     }
 
-    pub async fn reduce_block<'b>(
+    pub async fn reduce<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
         rollback: bool,

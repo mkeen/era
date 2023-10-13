@@ -11,33 +11,17 @@ use pallas::ledger::traverse::MultiEraBlock;
 
 use gasket::messaging::tokio::OutputPort;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::crosscut;
 use crate::model::{CRDTCommand, Delta};
 
-#[derive(Copy, Clone, Deserialize, Serialize)]
-pub enum Projection {
-    Cbor,
-    Json,
-}
-
-impl Default for Projection {
-    fn default() -> Self {
-        Self::Json
-    }
-}
-
 #[derive(Deserialize, Clone)]
 pub struct Config {
     pub key_prefix: Option<String>,
     pub royalty_key_prefix: Option<String>,
-    pub historical_metadata: Option<bool>,
-    pub policy_asset_index: Option<bool>,
-    pub royalty_metadata: Option<bool>,
-    pub projection: Option<Projection>,
     pub filter: Option<crosscut::filters::Predicate>,
 }
 
@@ -294,7 +278,7 @@ impl Reducer {
         Some(())
     }
 
-    pub async fn reduce_block<'b>(
+    pub async fn reduce<'b>(
         &mut self,
         block: &MultiEraBlock<'b>,
         rollback: bool,
@@ -362,6 +346,6 @@ impl Config {
             time: crosscut::time::NaiveProvider::new(chain),
         };
 
-        super::Reducer::AssetMetadata(worker)
+        super::Reducer::Metadata(worker)
     }
 }

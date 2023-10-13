@@ -60,7 +60,7 @@ impl Reducer {
         Ok(())
     }
 
-    pub async fn reduce_block<'b>(
+    pub async fn reduce<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
         output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
@@ -104,6 +104,6 @@ impl Config {
             time: crosscut::time::NaiveProvider::new(chain.clone()),
         };
 
-        super::Reducer::PolicyAssetsMoved(reducer)
+        super::Reducer::AssetsLastMoved(reducer)
     }
 }
