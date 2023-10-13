@@ -6,7 +6,7 @@
 [source]
 type = "N2C"
 path = "/var/run/node.socket"
-min_depth = 10
+min_depth = 100
 
 # [source]
 # type = "UTXORPC"
