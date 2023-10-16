@@ -6,7 +6,6 @@ use era::{
 };
 use gasket::runtime::spawn_stage;
 use serde::Deserialize;
-use std::time::Duration;
 
 #[derive(Deserialize)]
 #[serde(tag = "type")]

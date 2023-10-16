@@ -4,10 +4,7 @@ use std::time::Duration;
 use gasket::messaging::tokio::OutputPort;
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraHeader};
 use pallas::network::facades::PeerClient;
-use pallas::network::miniprotocols::blockfetch::{self, Range};
-use pallas::network::miniprotocols::chainsync::{
-    self, HeaderContent, NextResponse, RollbackBuffer,
-};
+use pallas::network::miniprotocols::chainsync::{HeaderContent, NextResponse};
 use pallas::network::miniprotocols::Point;
 
 use gasket::framework::*;
@@ -48,8 +45,6 @@ pub struct Stage {
 
     #[metric]
     pub chain_tip: gasket::metrics::Gauge,
-    //#[metric]
-    //pub last_block: gasket::metrics::Gauge,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -70,7 +65,6 @@ impl gasket::framework::Worker<Stage> for Worker {
             Some(x) => {
                 log::info!("found existing cursor in storage plugin: {:?}", x);
                 let point: Point = x.try_into().unwrap();
-                //stage.last_block.set(point.slot_or_default() as i64);
                 peer.chainsync
                     .find_intersect(vec![point])
                     .await
@@ -248,6 +242,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                                             parsed_headers.hash().to_vec(),
                                         ))
                                         .await
+                                        .or_retry()
                                     {
                                         Ok(static_single) => {
                                             blocks

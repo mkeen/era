@@ -6,7 +6,7 @@
 [source]
 type = "N2C"
 path = "/var/run/node.socket"
-min_depth = 100
+min_depth = 10
 
 # [source]
 # type = "UTXORPC"
@@ -30,6 +30,7 @@ cursor_key = "_cursor"
 type = "Utxo"
 key_prefix = "tx"
 coin_key_prefix = "c"
+datum_key_prefix = "d"
 
 [[reducers]]
 type = "Metadata"
@@ -55,7 +56,7 @@ key_prefix = "pr"
 
 [[reducers]]
 type = "StakeToPool"
-key_prefix = "p"
+key_prefix = "pl"
 
 # [[reducers]]
 # type = "UtxoOwners"

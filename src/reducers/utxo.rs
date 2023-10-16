@@ -20,6 +20,7 @@ use crate::{crosscut, model, prelude::*};
 pub struct Config {
     pub key_prefix: Option<String>,
     pub coin_key_prefix: Option<String>,
+    pub datum_key_prefix: Option<String>,
 }
 
 impl Default for Config {
@@ -27,6 +28,7 @@ impl Default for Config {
         Self {
             key_prefix: Some("tx".to_string()),
             coin_key_prefix: Some("c".to_string()),
+            datum_key_prefix: Some("d".to_string()),
         }
     }
 }
@@ -188,6 +190,47 @@ impl Reducer {
         Ok(())
     }
 
+    async fn datum_state<'b>(
+        &mut self,
+        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        address: &str,
+        tx_str: &str,
+        utxo: &'b MultiEraOutput<'b>,
+        should_exist: bool,
+    ) -> Result<(), gasket::error::Error> {
+        let mut out = output.lock().await;
+
+        match utxo.datum() {
+            Some(datum) => match datum {
+                pallas::ledger::primitives::babbage::PseudoDatumOption::Data(datum) => {
+                    let raw_cbor_bytes: &[u8] = datum.0.raw_cbor();
+
+                    out.send(
+                        match should_exist {
+                            true => model::CRDTCommand::set_add(
+                                self.config.datum_key_prefix.as_deref(),
+                                tx_str,
+                                format!("{}/{}", address, hex::encode(raw_cbor_bytes)),
+                            ),
+                            false => model::CRDTCommand::set_remove(
+                                self.config.datum_key_prefix.as_deref(),
+                                tx_str,
+                                format!("{}/{}", address, hex::encode(raw_cbor_bytes)),
+                            ),
+                        }
+                        .into(),
+                    )
+                    .await?;
+                }
+
+                _ => {}
+            },
+            None => {}
+        }
+
+        Ok(())
+    }
+
     async fn process_consumed_txo(
         &mut self,
         ctx: &model::BlockContext,
@@ -215,6 +258,16 @@ impl Reducer {
                 output,
                 soa.as_str(),
                 &format!("{}#{}", input.hash(), input.index()),
+                rollback,
+            )
+            .await
+            .unwrap();
+
+            self.datum_state(
+                output,
+                soa.as_str(),
+                &format!("{}#{}", input.hash(), input.index()),
+                &utxo,
                 rollback,
             )
             .await
@@ -270,7 +323,7 @@ impl Reducer {
     async fn process_produced_txo<'b>(
         &mut self,
         tx_hash: &Hash<32>,
-        tx_output: &MultiEraOutput<'b>,
+        tx_output: &'b MultiEraOutput<'b>,
         output_idx: usize,
         output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
         rollback: bool,
@@ -280,9 +333,19 @@ impl Reducer {
 
             self.coin_state(
                 output,
-                tx_address.as_str(),
+                &tx_address,
                 &format!("{}#{}", tx_hash, output_idx),
                 tx_output.lovelace_amount().to_string().as_str(),
+                !rollback,
+            )
+            .await
+            .unwrap();
+
+            self.datum_state(
+                output,
+                &tx_address,
+                &format!("{}#{}", tx_hash, output_idx),
+                &tx_output,
                 !rollback,
             )
             .await

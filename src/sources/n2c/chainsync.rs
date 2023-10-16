@@ -36,8 +36,6 @@ pub struct Stage {
 
     #[metric]
     pub chain_tip: gasket::metrics::Gauge,
-    //#[metric]
-    //pub last_block: gasket::metrics::Gauge,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -202,12 +200,13 @@ impl gasket::framework::Worker<Stage> for Worker {
                             NextResponse::RollForward(cbor, t) => {
                                 log::warn!("rolling forward");
 
+                                stage.chain_tip.set(t.1 as i64);
+
                                 blocks.push(RawBlockPayload::RollForward(cbor.0));
 
                                 blocks
                             }
                             NextResponse::RollBackward(p, t) => {
-                                log::warn!("rolling back");
                                 let mut blocks_client = stage.blocks.lock().await;
 
                                 blocks_client.enqueue_rollback_batch(&p);

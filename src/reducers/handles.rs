@@ -8,7 +8,7 @@ use gasket::messaging::tokio::OutputPort;
 use tokio::sync::Mutex;
 
 use crate::model::CRDTCommand;
-use crate::{crosscut, model};
+use crate::{crosscut, model, prelude::*};
 
 use super::utils::AssetFingerprint;
 
@@ -61,7 +61,12 @@ impl Reducer {
         for tx in block.txs().iter() {
             if rollback {
                 for input in tx.consumes() {
-                    if let Ok(txo) = ctx.find_utxo(&input.output_ref()) {
+                    if let Some(txo) = ctx
+                        .find_utxo(&input.output_ref())
+                        .apply_policy(error_policy)
+                        .or_retry()
+                        .unwrap()
+                    {
                         let mut asset_names: Vec<String> = vec![];
 
                         for asset_list in txo.non_ada_assets() {
@@ -87,13 +92,13 @@ impl Reducer {
                             }
                         };
 
-                        for asset in asset_names {
+                        for asset_name in asset_names {
                             out.send(
                                 model::CRDTCommand::any_write_wins(
                                     Some(
                                         self.config.key_prefix.clone().unwrap_or_default().as_str(),
                                     ),
-                                    asset.clone(),
+                                    format!("${}", asset_name),
                                     soa.to_string(),
                                 )
                                 .into(),
@@ -107,7 +112,7 @@ impl Reducer {
                                         self.config.key_prefix.clone().unwrap_or_default().as_str(),
                                     ),
                                     soa.to_string(),
-                                    asset,
+                                    format!("${}", asset_name),
                                 )
                                 .into(),
                             )
@@ -154,11 +159,11 @@ impl Reducer {
                         Address::Stake(stake) => stake.to_bech32().unwrap_or(address.to_string()),
                     };
 
-                    for asset in asset_names {
+                    for asset_name in asset_names {
                         out.send(
                             model::CRDTCommand::any_write_wins(
                                 Some(self.config.key_prefix.clone().unwrap_or_default().as_str()),
-                                asset.clone(),
+                                format!("${}", asset_name),
                                 soa.to_string(),
                             )
                             .into(),
@@ -170,7 +175,7 @@ impl Reducer {
                             model::CRDTCommand::any_write_wins(
                                 Some(self.config.key_prefix.clone().unwrap_or_default().as_str()),
                                 soa.to_string(),
-                                asset,
+                                format!("${}", asset_name),
                             )
                             .into(),
                         )
