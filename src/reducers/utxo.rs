@@ -78,14 +78,14 @@ impl Reducer {
         soa: &str,
         tx_str: &str,
         should_exist: bool,
-    ) -> Option<()> {
+    ) -> Result<(), gasket::error::Error> {
         let mut out = output.lock().await;
 
         match should_exist {
             true => {
                 let _ = out.send(
                     model::CRDTCommand::set_add(
-                        self.config.key_prefix.as_deref(),
+                        self.config.key_prefix.clone().as_deref(),
                         &soa,
                         tx_str.to_string(),
                     )
@@ -96,7 +96,7 @@ impl Reducer {
             _ => {
                 let _ = out.send(
                     model::CRDTCommand::set_remove(
-                        self.config.key_prefix.as_deref(),
+                        self.config.key_prefix.clone().as_deref(),
                         &soa,
                         tx_str.to_string(),
                     )
@@ -105,7 +105,7 @@ impl Reducer {
             }
         }
 
-        Some(())
+        Ok(())
     }
 
     async fn coin_state(
@@ -115,14 +115,14 @@ impl Reducer {
         tx_str: &str,
         lovelace_amt: &str,
         should_exist: bool,
-    ) -> Option<()> {
+    ) -> Result<(), gasket::error::Error> {
         let mut out = output.lock().await;
 
         match should_exist {
             true => {
                 out.send(
                     model::CRDTCommand::set_add(
-                        self.config.coin_key_prefix.as_deref(),
+                        self.config.coin_key_prefix.clone().as_deref(),
                         tx_str,
                         format!("{}/{}", address, lovelace_amt),
                     )
@@ -135,7 +135,7 @@ impl Reducer {
             _ => {
                 out.send(
                     model::CRDTCommand::set_remove(
-                        self.config.coin_key_prefix.as_deref(),
+                        self.config.coin_key_prefix.clone().as_deref(),
                         tx_str,
                         format!("{}/{}", address, lovelace_amt),
                     )
@@ -146,7 +146,7 @@ impl Reducer {
             }
         };
 
-        Some(())
+        Ok(())
     }
 
     async fn token_state(
@@ -162,29 +162,29 @@ impl Reducer {
         let mut out = output.lock().await;
 
         match should_exist {
-            true => out
-                .send(
+            true => {
+                out.send(
                     model::CRDTCommand::set_add(
-                        self.config.key_prefix.as_deref(),
+                        self.config.key_prefix.clone().as_deref(),
                         tx_str,
                         format!("{}/{}/{}/{}", address, policy_id, fingerprint, quantity),
                     )
                     .into(),
                 )
-                .await
-                .unwrap(),
+                .await?
+            }
 
-            _ => out
-                .send(
+            _ => {
+                out.send(
                     model::CRDTCommand::set_remove(
-                        self.config.key_prefix.as_deref(),
+                        self.config.key_prefix.clone().as_deref(),
                         tx_str,
                         format!("{}/{}/{}/{}", address, policy_id, fingerprint, quantity),
                     )
                     .into(),
                 )
-                .await
-                .unwrap(),
+                .await?
+            }
         };
 
         Ok(())
@@ -208,12 +208,12 @@ impl Reducer {
                     out.send(
                         match should_exist {
                             true => model::CRDTCommand::set_add(
-                                self.config.datum_key_prefix.as_deref(),
+                                self.config.datum_key_prefix.clone().as_deref(),
                                 tx_str,
                                 format!("{}/{}", address, hex::encode(raw_cbor_bytes)),
                             ),
                             false => model::CRDTCommand::set_remove(
-                                self.config.datum_key_prefix.as_deref(),
+                                self.config.datum_key_prefix.clone().as_deref(),
                                 tx_str,
                                 format!("{}/{}", address, hex::encode(raw_cbor_bytes)),
                             ),
@@ -260,8 +260,7 @@ impl Reducer {
                 &format!("{}#{}", input.hash(), input.index()),
                 rollback,
             )
-            .await
-            .unwrap();
+            .await?;
 
             self.datum_state(
                 output,
@@ -270,8 +269,7 @@ impl Reducer {
                 &utxo,
                 rollback,
             )
-            .await
-            .unwrap();
+            .await?;
 
             self.coin_state(
                 output,
@@ -283,8 +281,7 @@ impl Reducer {
                 utxo.lovelace_amount().to_string().as_str(),
                 rollback,
             )
-            .await
-            .unwrap();
+            .await?;
         }
 
         // Spend Native Tokens
@@ -338,8 +335,7 @@ impl Reducer {
                 tx_output.lovelace_amount().to_string().as_str(),
                 !rollback,
             )
-            .await
-            .unwrap();
+            .await?;
 
             self.datum_state(
                 output,
@@ -348,8 +344,7 @@ impl Reducer {
                 &tx_output,
                 !rollback,
             )
-            .await
-            .unwrap();
+            .await?;
 
             for asset_group in tx_output.non_ada_assets() {
                 for asset in asset_group.assets() {
@@ -372,8 +367,7 @@ impl Reducer {
                                     quantity.to_string().as_str(),
                                     !rollback,
                                 )
-                                .await
-                                .unwrap();
+                                .await?
                             }
                         }
                     };
@@ -405,14 +399,12 @@ impl Reducer {
         for tx in block.txs() {
             for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
                 self.process_consumed_txo(&ctx, &consumed, output, rollback, error_policy)
-                    .await
-                    .expect("TODO: panic message");
+                    .await?
             }
 
             for (idx, produced) in tx.produces().iter() {
                 self.process_produced_txo(&tx.hash(), &produced, idx.clone(), output, rollback)
-                    .await
-                    .expect("TODO: panic message");
+                    .await?
             }
         }
 

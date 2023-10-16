@@ -1,5 +1,7 @@
 use std::{collections::HashMap, fmt::Debug};
 
+use std::convert::Into;
+
 use pallas::{
     ledger::traverse::{Era, MultiEraBlock, MultiEraOutput, MultiEraTx, OutputRef},
     network::miniprotocols::Point,
@@ -152,10 +154,6 @@ pub enum CRDTCommand {
 }
 
 impl CRDTCommand {
-    pub fn into(self) -> gasket::messaging::Message<CRDTCommand> {
-        gasket::messaging::Message { payload: self }
-    }
-
     pub fn block_starting(block: &MultiEraBlock) -> CRDTCommand {
         log::debug!("block starting");
         let hash = block.hash();
