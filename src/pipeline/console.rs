@@ -75,6 +75,8 @@ impl TuiConsole {
     }
 
     fn refresh(&self, pipeline: &super::Pipeline) -> Option<()> {
+        std::thread::sleep(Duration::from_millis(500));
+
         for tether in pipeline.tethers.iter() {
             let state = match tether.check_state() {
                 gasket::runtime::TetherState::Dropped => "dropped!",
