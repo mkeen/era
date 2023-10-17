@@ -36,6 +36,9 @@ pub struct Stage {
 
     #[metric]
     pub chain_tip: gasket::metrics::Gauge,
+
+    #[metric]
+    pub historic_blocks_removed: gasket::metrics::Counter,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -143,6 +146,7 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                             loop {
                                 let pop_rollback_block = blocks_client.rollback_pop();
+                                stage.historic_blocks_removed.inc(1);
 
                                 if let Some(last_good_block) = blocks_client.get_block_latest() {
                                     if let Ok(parsed_last_good_block) =
@@ -213,6 +217,7 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                                 loop {
                                     let pop_rollback_block = blocks_client.rollback_pop();
+                                    stage.historic_blocks_removed.inc(1);
 
                                     if let Some(last_good_block) = blocks_client.get_block_latest()
                                     {
@@ -223,6 +228,10 @@ impl gasket::framework::Worker<Stage> for Worker {
                                                 parsed_last_good_block.slot(),
                                                 parsed_last_good_block.hash().to_vec(),
                                             );
+
+                                            stage
+                                                .chain_tip
+                                                .set(parsed_last_good_block.slot() as i64);
 
                                             if let Some(rollback_cbor) = pop_rollback_block {
                                                 blocks.push(RawBlockPayload::RollBack(

@@ -45,6 +45,7 @@ impl Config {
             config: self,
             output: Default::default(),
             chain_tip: Default::default(),
+            historic_blocks_removed: Default::default(),
             intersect: ctx.intersect.clone(),
             chain: ctx.chain.clone(),
             finalize: ctx.finalize.clone(),

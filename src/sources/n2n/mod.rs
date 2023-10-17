@@ -51,6 +51,7 @@ impl Config {
             finalize: ctx.finalize.clone(),
             cursor,
             blocks,
+            historic_blocks_removed: Default::default(),
         }
     }
 }

@@ -117,6 +117,7 @@ pub async fn bootstrap(
         output: Arc::new(Mutex::new(output)),
         ops_count: Default::default(),
         last_block: Default::default(),
+        historic_blocks: Default::default(),
         error_policy: ctx.error_policy.clone(),
     };
 
@@ -143,6 +144,9 @@ pub struct Stage {
 
     #[metric]
     last_block: gasket::metrics::Gauge,
+
+    #[metric]
+    historic_blocks: gasket::metrics::Counter,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -168,6 +172,7 @@ impl gasket::framework::Worker<Stage> for Worker {
     ) -> Result<(), WorkerError> {
         match unit {
             model::EnrichedBlockPayload::RollForward(block, ctx) => {
+                stage.historic_blocks.inc(1);
                 stage.last_block.set(
                     self.reduce_block(
                         &block,

@@ -29,6 +29,8 @@ struct TuiConsole {
     enrich_matches: indicatif::ProgressBar,
     enrich_mismatches: indicatif::ProgressBar,
     enrich_blocks: indicatif::ProgressBar,
+    historic_blocks: indicatif::ProgressBar,
+    historic_blocks_removed: indicatif::ProgressBar,
 }
 
 impl TuiConsole {
@@ -67,6 +69,8 @@ impl TuiConsole {
             enrich_blocks: Self::build_counter_spinner("enrich blocks", &container),
             reducer_ops_count: Self::build_counter_spinner("reducer ops", &container),
             storage_ops_count: Self::build_counter_spinner("storage ops", &container),
+            historic_blocks: Self::build_counter_spinner("history inserts", &container),
+            historic_blocks_removed: Self::build_counter_spinner("history removes", &container),
         }
     }
 
@@ -128,6 +132,14 @@ impl TuiConsole {
                             (_, "enrich_blocks", Reading::Count(x)) => {
                                 self.enrich_blocks.set_position(x);
                                 self.enrich_blocks.set_message(state);
+                            }
+                            (_, "historic_blocks", Reading::Count(x)) => {
+                                self.historic_blocks.set_position(x);
+                                self.historic_blocks.set_message("available");
+                            }
+                            (_, "historic_blocks_removed", Reading::Count(x)) => {
+                                self.historic_blocks_removed.set_position(x);
+                                self.historic_blocks_removed.set_message("available");
                             }
                             _ => (),
                         }
