@@ -101,7 +101,7 @@ impl TuiConsole {
                                 self.received_blocks.set_position(x);
                                 self.received_blocks.set_message(state);
                             }
-                            ("reducers", "ops_count", Reading::Count(x)) => {
+                            (_, "ops_count", Reading::Count(x)) => {
                                 self.reducer_ops_count.set_position(x);
                                 self.reducer_ops_count.set_message(state);
                             }
