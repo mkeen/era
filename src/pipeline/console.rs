@@ -1,14 +1,9 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-use futures::FutureExt;
-use gasket::{metrics::Reading, runtime::Tether};
+use gasket::metrics::Reading;
 use lazy_static::{__Deref, lazy_static};
 use log::Log;
-use tokio::sync::{oneshot, Mutex};
-use tokio::time::timeout;
+use tokio::sync::Mutex;
 
 #[derive(clap::ValueEnum, Clone)]
 pub enum Mode {
@@ -45,7 +40,7 @@ impl TuiConsole {
             indicatif::ProgressBar::new_spinner().with_style(
                 indicatif::ProgressStyle::default_spinner()
                     .template(&format!(
-                        "{{spinner}} {:<20} {{msg:<20}} {{pos:>8}} | {{per_sec}}",
+                        "{:<20} {{msg:<20}} {{pos:>8}} | {{per_sec}}",
                         name
                     ))
                     .unwrap(),
@@ -75,7 +70,7 @@ impl TuiConsole {
         }
     }
 
-    async fn refresh(&self, pipeline: &super::Pipeline) -> Option<()> {
+    fn refresh(&self, pipeline: &super::Pipeline) -> Option<()> {
         for tether in pipeline.tethers.iter() {
             let state = match tether.check_state() {
                 gasket::runtime::TetherState::Dropped => "dropped!",
@@ -173,13 +168,7 @@ impl PlainConsole {
         }
     }
 
-    async fn refresh(&self, pipeline: &super::Pipeline) -> Option<()> {
-        let mut last_report = self.last_report.lock().await;
-
-        if last_report.elapsed() <= Duration::from_secs(10) {
-            return None;
-        }
-
+    fn refresh(&self, pipeline: &super::Pipeline) -> Option<()> {
         for tether in pipeline.tethers.iter() {
             match tether.check_state() {
                 gasket::runtime::TetherState::Dropped => {
@@ -207,8 +196,6 @@ impl PlainConsole {
             }
         }
 
-        *last_report = Instant::now();
-
         None
     }
 }
@@ -230,9 +217,9 @@ pub fn initialize(mode: &Option<Mode>) {
     }
 }
 
-pub async fn refresh(mode: &Option<Mode>, pipeline: &super::Pipeline) -> Option<()> {
+pub fn refresh(mode: &Option<Mode>, pipeline: &super::Pipeline) -> Option<()> {
     match mode {
-        Some(Mode::TUI) => TUI_CONSOLE.refresh(pipeline).await,
-        _ => PLAIN_CONSOLE.refresh(pipeline).await,
+        Some(Mode::TUI) => TUI_CONSOLE.refresh(pipeline),
+        _ => PLAIN_CONSOLE.refresh(pipeline),
     }
 }

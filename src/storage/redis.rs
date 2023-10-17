@@ -39,7 +39,7 @@ impl Config {
                 config: self.clone(),
             },
             input: Default::default(),
-            ops_count: Default::default(),
+            storage_ops: Default::default(),
             blocks,
         }
     }
@@ -83,7 +83,7 @@ pub struct Stage {
     pub input: InputPort<CRDTCommand>,
 
     #[metric]
-    ops_count: gasket::metrics::Counter,
+    storage_ops: gasket::metrics::Counter,
 }
 
 pub struct Worker {
@@ -309,7 +309,7 @@ impl gasket::framework::Worker<Stage> for Worker {
             }
         };
 
-        stage.ops_count.inc(1);
+        stage.storage_ops.inc(1);
 
         Ok(())
     }

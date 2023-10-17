@@ -29,11 +29,11 @@ impl Config {
             config: self,
             input: Default::default(),
             output: Default::default(),
-            inserts_counter: Default::default(),
-            remove_counter: Default::default(),
-            matches_counter: Default::default(),
-            mismatches_counter: Default::default(),
-            blocks_counter: Default::default(),
+            enrich_inserts: Default::default(),
+            enrich_removes: Default::default(),
+            enrich_matches: Default::default(),
+            enrich_mismatches: Default::default(),
+            enrich_blocks: Default::default(),
         }
     }
 }
@@ -287,15 +287,15 @@ pub struct Stage {
     pub output: OutputPort<EnrichedBlockPayload>,
 
     #[metric]
-    pub inserts_counter: gasket::metrics::Counter,
+    pub enrich_inserts: gasket::metrics::Counter,
     #[metric]
-    pub blocks_counter: gasket::metrics::Counter,
+    pub enrich_blocks: gasket::metrics::Counter,
     #[metric]
-    pub remove_counter: gasket::metrics::Counter,
+    pub enrich_removes: gasket::metrics::Counter,
     #[metric]
-    pub matches_counter: gasket::metrics::Counter,
+    pub enrich_matches: gasket::metrics::Counter,
     #[metric]
-    pub mismatches_counter: gasket::metrics::Counter,
+    pub enrich_mismatches: gasket::metrics::Counter,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -341,24 +341,24 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                     let txs = &block.txs();
                     stage
-                        .inserts_counter
+                        .enrich_inserts
                         .inc(self.insert_produced_utxos(db, txs).or_panic().unwrap());
 
                     let (ctx, match_count, mismatch_count) = self
                         .par_fetch_referenced_utxos(db, block.number(), &txs)
                         .or_panic()?;
 
-                    stage.matches_counter.inc(match_count);
-                    stage.mismatches_counter.inc(mismatch_count);
+                    stage.enrich_matches.inc(match_count);
+                    stage.enrich_mismatches.inc(mismatch_count);
 
                     // and finally we remove utxos consumed by the block
                     let (_, removed_count) = self
                         .remove_consumed_utxos(db, consumed_ring, &txs)
                         .expect("todo panic");
 
-                    stage.remove_counter.inc(removed_count);
+                    stage.enrich_removes.inc(removed_count);
 
-                    stage.blocks_counter.inc(1);
+                    stage.enrich_blocks.inc(1);
 
                     stage
                         .output
@@ -375,7 +375,7 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                         // Revert Anything to do with this block
                         stage
-                            .remove_counter
+                            .enrich_removes
                             .inc(self.remove_produced_utxos(db, &txs).unwrap());
 
                         self.replace_consumed_utxos(db, consumed_ring, &txs)
@@ -385,8 +385,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                             .par_fetch_referenced_utxos(db, last_known_number.clone(), &txs)
                             .or_restart()?;
 
-                        stage.matches_counter.inc(match_count);
-                        stage.mismatches_counter.inc(mismatch_count);
+                        stage.enrich_matches.inc(match_count);
+                        stage.enrich_mismatches.inc(mismatch_count);
 
                         return stage
                             .output
@@ -399,7 +399,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                             .or_panic();
                     }
 
-                    stage.blocks_counter.inc(1);
+                    stage.enrich_blocks.inc(1);
 
                     Ok(())
                 }

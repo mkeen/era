@@ -31,6 +31,7 @@ impl Worker {
         output: &'b Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &'b crosscut::policies::RuntimePolicy,
         reducers: &'b mut Vec<Reducer>,
+        ops_count: &gasket::metrics::Counter,
     ) -> Option<u64> {
         let point = match rollback {
             true => {
@@ -76,7 +77,9 @@ impl Worker {
 
         for res in results {
             match res {
-                Ok(_) => {}
+                Ok(_) => {
+                    ops_count.inc(1);
+                }
                 Err(_) => {
                     panic!("Reducer error")
                 }
@@ -175,6 +178,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                         &stage.output,
                         &stage.error_policy,
                         &mut stage.reducers,
+                        &stage.ops_count,
                     )
                     .await
                     .unwrap() as i64,
@@ -191,6 +195,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                         &stage.output,
                         &stage.error_policy,
                         &mut stage.reducers,
+                        &stage.ops_count,
                     )
                     .await
                     .unwrap() as i64,

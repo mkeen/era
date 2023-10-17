@@ -76,12 +76,12 @@ impl gasket::framework::Worker<Stage> for Pipeline {
         return Ok(pipe);
     }
 
-    async fn schedule(&mut self, stage: &mut Stage) -> Result<WorkSchedule<()>, WorkerError> {
+    async fn schedule(&mut self, _: &mut Stage) -> Result<WorkSchedule<()>, WorkerError> {
         Ok(WorkSchedule::Unit(()))
     }
 
     async fn execute(&mut self, _: &(), stage: &mut Stage) -> Result<(), WorkerError> {
-        console::refresh(&stage.args_console, self).await;
+        console::refresh(&stage.args_console, self);
         Ok(())
     }
 }
