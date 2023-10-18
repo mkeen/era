@@ -147,9 +147,8 @@ impl TuiConsole {
                         }
                     }
                 }
-                Err(err) => {
+                Err(_) => {
                     log::warn!("couldn't read metrics");
-                    dbg!(err);
                 }
             };
         }
