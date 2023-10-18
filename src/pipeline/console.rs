@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use gasket::metrics::Reading;
+use gasket::{framework::WorkerError, metrics::Reading};
 use lazy_static::{__Deref, lazy_static};
 use log::Log;
 use tokio::sync::Mutex;
@@ -20,6 +20,7 @@ impl Default for Mode {
 }
 
 struct TuiConsole {
+    last_report: Mutex<Instant>,
     chainsync_progress: indicatif::ProgressBar,
     received_blocks: indicatif::ProgressBar,
     reducer_ops_count: indicatif::ProgressBar,
@@ -71,12 +72,11 @@ impl TuiConsole {
             storage_ops_count: Self::build_counter_spinner("storage ops", &container),
             historic_blocks: Self::build_counter_spinner("history inserts", &container),
             historic_blocks_removed: Self::build_counter_spinner("history removes", &container),
+            last_report: Mutex::new(Instant::now()),
         }
     }
 
-    fn refresh(&self, pipeline: &super::Pipeline) -> Option<()> {
-        std::thread::sleep(Duration::from_millis(500));
-
+    async fn refresh(&self, pipeline: &super::Pipeline) -> Result<(), WorkerError> {
         for tether in pipeline.tethers.iter() {
             let state = match tether.check_state() {
                 gasket::runtime::TetherState::Dropped => "dropped!",
@@ -154,7 +154,7 @@ impl TuiConsole {
             };
         }
 
-        None
+        Ok(())
     }
 }
 
@@ -182,7 +182,9 @@ impl PlainConsole {
         }
     }
 
-    fn refresh(&self, pipeline: &super::Pipeline) -> Option<()> {
+    async fn refresh(&self, pipeline: &super::Pipeline) -> Result<(), WorkerError> {
+        let _ = self.last_report.lock().await;
+
         for tether in pipeline.tethers.iter() {
             match tether.check_state() {
                 gasket::runtime::TetherState::Dropped => {
@@ -210,7 +212,7 @@ impl PlainConsole {
             }
         }
 
-        None
+        Ok(())
     }
 }
 
@@ -231,9 +233,9 @@ pub fn initialize(mode: &Option<Mode>) {
     }
 }
 
-pub fn refresh(mode: &Option<Mode>, pipeline: &super::Pipeline) -> Option<()> {
+pub async fn refresh(mode: &Option<Mode>, pipeline: &super::Pipeline) -> Result<(), WorkerError> {
     match mode {
-        Some(Mode::TUI) => TUI_CONSOLE.refresh(pipeline),
-        _ => PLAIN_CONSOLE.refresh(pipeline),
+        Some(Mode::TUI) => TUI_CONSOLE.refresh(pipeline).await,
+        _ => PLAIN_CONSOLE.refresh(pipeline).await,
     }
 }

@@ -6,10 +6,12 @@ use pallas::{
     codec::minicbor,
     ledger::traverse::{Era, MultiEraBlock, MultiEraTx, OutputRef},
 };
+
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 use sled::IVec;
 
+use crate::crosscut;
 use crate::{
     model::{self, BlockContext, EnrichedBlockPayload, RawBlockPayload},
     pipeline,
@@ -34,6 +36,7 @@ impl Config {
             enrich_matches: Default::default(),
             enrich_mismatches: Default::default(),
             enrich_blocks: Default::default(),
+            policy: ctx.error_policy.clone(),
         }
     }
 }
@@ -105,55 +108,29 @@ impl Worker {
         }
     }
 
-    fn insert_produced_utxos(
-        &self,
-        db: &sled::Db,
-        txs: &[MultiEraTx],
-    ) -> Result<u64, crate::Error> {
+    fn insert_produced_utxos(&self, db: &sled::Db, txs: &[MultiEraTx]) -> Result<(), crate::Error> {
         let mut insert_batch = sled::Batch::default();
-
-        let mut produced: u64 = 0;
 
         for tx in txs.iter() {
             for (idx, output) in tx.produces() {
-                let key = format!("{}#{}", tx.hash(), idx);
-
-                let era = tx.era().into();
-                let body = output.encode();
-                let value: IVec = SledTxValue(era, body).try_into()?;
-
-                produced += 1;
-
-                insert_batch.insert(key.as_bytes(), value)
+                let value: IVec = SledTxValue(tx.era() as u16, output.encode()).try_into()?;
+                insert_batch.insert(format!("{}#{}", tx.hash(), idx).as_bytes(), value)
             }
         }
 
-        let batch_results = db.apply_batch(insert_batch).or_retry();
-
-        batch_results.map_err(crate::Error::storage).unwrap();
-
-        Ok(produced)
+        db.apply_batch(insert_batch).map_err(crate::Error::storage)
     }
 
-    fn remove_produced_utxos(
-        &self,
-        db: &sled::Db,
-        txs: &[MultiEraTx],
-    ) -> Result<u64, crate::Error> {
+    fn remove_produced_utxos(&self, db: &sled::Db, txs: &[MultiEraTx]) -> Result<(), crate::Error> {
         let mut remove_batch = sled::Batch::default();
-
-        let mut removed_count: u64 = 0;
 
         for tx in txs.iter() {
             for (idx, _) in tx.produces() {
-                removed_count += 1;
                 remove_batch.remove(format!("{}#{}", tx.hash(), idx).as_bytes());
             }
         }
 
-        db.apply_batch(remove_batch)
-            .map_err(crate::Error::storage)
-            .and(Ok(removed_count))
+        db.apply_batch(remove_batch).map_err(crate::Error::storage)
     }
 
     #[inline]
@@ -283,6 +260,8 @@ impl Worker {
 pub struct Stage {
     pub config: Config,
 
+    pub policy: crosscut::policies::RuntimePolicy,
+
     pub input: InputPort<RawBlockPayload>,
     pub output: OutputPort<EnrichedBlockPayload>,
 
@@ -332,81 +311,96 @@ impl gasket::framework::Worker<Stage> for Worker {
         unit: &RawBlockPayload,
         stage: &mut Stage,
     ) -> Result<(), WorkerError> {
-        let all_dbs = self.db_refs_all().unwrap();
+        match self.db_refs_all() {
+            Ok(db_refs) => match db_refs {
+                Some((db, consumed_ring)) => match unit {
+                    model::RawBlockPayload::RollForward(cbor) => {
+                        let block = MultiEraBlock::decode(&cbor).unwrap();
 
-        if let Some((db, consumed_ring)) = all_dbs {
-            match unit {
-                model::RawBlockPayload::RollForward(cbor) => {
-                    let block = MultiEraBlock::decode(&cbor).unwrap();
+                        let txs = &block.txs();
 
-                    let txs = &block.txs();
-                    stage
-                        .enrich_inserts
-                        .inc(self.insert_produced_utxos(db, txs).or_panic().unwrap());
+                        let result = self.insert_produced_utxos(db, txs).or_retry();
 
-                    let (ctx, match_count, mismatch_count) = self
-                        .par_fetch_referenced_utxos(db, block.number(), &txs)
-                        .or_panic()?;
+                        if let Ok(_) = result {
+                            stage.enrich_inserts.inc(txs.len() as u64);
+                        } else if let Err(error_result) = result {
+                            return Err(error_result);
+                        }
 
-                    stage.enrich_matches.inc(match_count);
-                    stage.enrich_mismatches.inc(mismatch_count);
+                        match self
+                            .par_fetch_referenced_utxos(db, block.number(), &txs)
+                            .or_panic()
+                        {
+                            Ok((ctx, match_count, mismatch_count)) => {
+                                stage.enrich_matches.inc(match_count);
+                                stage.enrich_mismatches.inc(mismatch_count);
 
-                    // and finally we remove utxos consumed by the block
-                    let (_, removed_count) = self
-                        .remove_consumed_utxos(db, consumed_ring, &txs)
-                        .expect("todo panic");
+                                // and finally we remove utxos consumed by the block
+                                let (_, removed_count) =
+                                    self.remove_consumed_utxos(db, consumed_ring, &txs).unwrap(); // not handling error, todo
 
-                    stage.enrich_removes.inc(removed_count);
+                                stage.enrich_removes.inc(removed_count);
 
-                    stage.enrich_blocks.inc(1);
+                                stage.enrich_blocks.inc(1);
 
-                    stage
-                        .output
-                        .send(model::EnrichedBlockPayload::roll_forward(cbor.clone(), ctx))
-                        .await
-                        .or_panic()
-                }
-
-                model::RawBlockPayload::RollBack(cbor, (last_known_point, last_known_number)) => {
-                    let block = MultiEraBlock::decode(&cbor);
-
-                    if let Ok(block) = block {
-                        let txs = block.txs();
-
-                        // Revert Anything to do with this block
-                        stage
-                            .enrich_removes
-                            .inc(self.remove_produced_utxos(db, &txs).unwrap());
-
-                        self.replace_consumed_utxos(db, consumed_ring, &txs)
-                            .expect("todo: panic error");
-
-                        let (ctx, match_count, mismatch_count) = self
-                            .par_fetch_referenced_utxos(db, last_known_number.clone(), &txs)
-                            .or_restart()?;
-
-                        stage.enrich_matches.inc(match_count);
-                        stage.enrich_mismatches.inc(mismatch_count);
-
-                        return stage
-                            .output
-                            .send(model::EnrichedBlockPayload::roll_back(
-                                cbor.clone(),
-                                ctx,
-                                (last_known_point.clone(), last_known_number.clone()),
-                            ))
-                            .await
-                            .or_panic();
+                                stage
+                                    .output
+                                    .send(model::EnrichedBlockPayload::roll_forward(
+                                        cbor.clone(),
+                                        ctx,
+                                    ))
+                                    .await
+                                    .or_panic()
+                            }
+                            Err(e) => Err(e),
+                        }
                     }
 
-                    stage.enrich_blocks.inc(1);
+                    model::RawBlockPayload::RollBack(
+                        cbor,
+                        (last_known_point, last_known_number),
+                    ) => {
+                        let block = MultiEraBlock::decode(&cbor);
 
-                    Ok(())
-                }
-            }
-            .unwrap();
+                        if let Ok(block) = block {
+                            let txs = block.txs();
+
+                            // Revert Anything to do with this block
+                            self.remove_produced_utxos(db, &txs).or_retry()?;
+
+                            stage.enrich_removes.inc(txs.len() as u64);
+
+                            self.replace_consumed_utxos(db, consumed_ring, &txs)
+                                .or_panic()?;
+
+                            let (ctx, match_count, mismatch_count) = self
+                                .par_fetch_referenced_utxos(db, last_known_number.clone(), &txs)
+                                .or_restart()?;
+
+                            stage.enrich_matches.inc(match_count);
+                            stage.enrich_mismatches.inc(mismatch_count);
+
+                            stage
+                                .output
+                                .send(model::EnrichedBlockPayload::roll_back(
+                                    cbor.clone(),
+                                    ctx,
+                                    (last_known_point.clone(), last_known_number.clone()),
+                                ))
+                                .await
+                                .or_panic()?;
+                        }
+
+                        stage.enrich_blocks.inc(1);
+
+                        Ok(())
+                    }
+                },
+
+                None => Err(WorkerError::Retry),
+            },
+
+            Err(_) => Err(WorkerError::Retry),
         }
-
-        Ok(())
     }
 }

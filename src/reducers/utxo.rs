@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use gasket::messaging::tokio::OutputPort;
 use tokio::sync::Mutex;
 
-use crate::crosscut::policies::AppliesPolicy;
 use crate::model::CRDTCommand;
 use crate::{crosscut, model, prelude::*};
 
@@ -83,25 +82,29 @@ impl Reducer {
 
         match should_exist {
             true => {
-                let _ = out.send(
-                    model::CRDTCommand::set_add(
-                        self.config.key_prefix.clone().as_deref(),
-                        &soa,
-                        tx_str.to_string(),
+                let _ = out
+                    .send(
+                        model::CRDTCommand::set_add(
+                            self.config.key_prefix.clone().as_deref(),
+                            &soa,
+                            tx_str.to_string(),
+                        )
+                        .into(),
                     )
-                    .into(),
-                );
+                    .await?;
             }
 
             _ => {
-                let _ = out.send(
-                    model::CRDTCommand::set_remove(
-                        self.config.key_prefix.clone().as_deref(),
-                        &soa,
-                        tx_str.to_string(),
+                let _ = out
+                    .send(
+                        model::CRDTCommand::set_remove(
+                            self.config.key_prefix.clone().as_deref(),
+                            &soa,
+                            tx_str.to_string(),
+                        )
+                        .into(),
                     )
-                    .into(),
-                );
+                    .await?;
             }
         }
 
@@ -117,36 +120,20 @@ impl Reducer {
         should_exist: bool,
     ) -> Result<(), gasket::error::Error> {
         let mut out = output.lock().await;
+        out.send(gasket::messaging::Message::from(match should_exist {
+            true => model::CRDTCommand::set_add(
+                self.config.coin_key_prefix.clone().as_deref(),
+                tx_str,
+                format!("{}/{}", address, lovelace_amt),
+            ),
 
-        match should_exist {
-            true => {
-                out.send(
-                    model::CRDTCommand::set_add(
-                        self.config.coin_key_prefix.clone().as_deref(),
-                        tx_str,
-                        format!("{}/{}", address, lovelace_amt),
-                    )
-                    .into(),
-                )
-                .await
-                .unwrap();
-            }
-
-            _ => {
-                out.send(
-                    model::CRDTCommand::set_remove(
-                        self.config.coin_key_prefix.clone().as_deref(),
-                        tx_str,
-                        format!("{}/{}", address, lovelace_amt),
-                    )
-                    .into(),
-                )
-                .await
-                .unwrap();
-            }
-        };
-
-        Ok(())
+            _ => model::CRDTCommand::set_remove(
+                self.config.coin_key_prefix.clone().as_deref(),
+                tx_str,
+                format!("{}/{}", address, lovelace_amt),
+            ),
+        }))
+        .await
     }
 
     async fn token_state(
@@ -161,33 +148,20 @@ impl Reducer {
     ) -> Result<(), gasket::error::Error> {
         let mut out = output.lock().await;
 
-        match should_exist {
-            true => {
-                out.send(
-                    model::CRDTCommand::set_add(
-                        self.config.key_prefix.clone().as_deref(),
-                        tx_str,
-                        format!("{}/{}/{}/{}", address, policy_id, fingerprint, quantity),
-                    )
-                    .into(),
-                )
-                .await?
-            }
+        out.send(gasket::messaging::Message::from(match should_exist {
+            true => model::CRDTCommand::set_add(
+                self.config.key_prefix.clone().as_deref(),
+                tx_str,
+                format!("{}/{}/{}/{}", address, policy_id, fingerprint, quantity),
+            ),
 
-            _ => {
-                out.send(
-                    model::CRDTCommand::set_remove(
-                        self.config.key_prefix.clone().as_deref(),
-                        tx_str,
-                        format!("{}/{}/{}/{}", address, policy_id, fingerprint, quantity),
-                    )
-                    .into(),
-                )
-                .await?
-            }
-        };
-
-        Ok(())
+            _ => model::CRDTCommand::set_remove(
+                self.config.key_prefix.clone().as_deref(),
+                tx_str,
+                format!("{}/{}/{}/{}", address, policy_id, fingerprint, quantity),
+            ),
+        }))
+        .await
     }
 
     async fn datum_state<'b>(
@@ -306,8 +280,7 @@ impl Reducer {
                                 quantity.to_string().as_str(),
                                 rollback,
                             )
-                            .await
-                            .unwrap();
+                            .await?;
                         }
                     }
                 };
