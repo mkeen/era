@@ -96,7 +96,7 @@ impl Worker {
                     .into(),
             )
             .await
-            .expect("todo: handle error");
+            .or_panic()?;
 
         Ok(number)
     }
