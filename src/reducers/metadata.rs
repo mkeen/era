@@ -242,7 +242,8 @@ impl Reducer {
                                 },
 
                                 _ => CRDTCommand::noop(),
-                            }));
+                            }))
+                            .await?;
                     }
                 }
             }
