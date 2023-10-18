@@ -257,8 +257,13 @@ impl Reducer {
         ctx: &model::BlockContext,
         slot: u64,
         rollback: bool,
+        error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
-        if let Ok(spent_output) = ctx.find_utxo(&mei.output_ref()) {
+        if let Some(spent_output) = ctx
+            .find_utxo(&mei.output_ref())
+            .apply_policy(error_policy)
+            .or_panic()?
+        {
             let spent_from_soa =
                 self.stake_or_address_from_address(&spent_output.address().unwrap());
 
@@ -289,7 +294,7 @@ impl Reducer {
 
         for tx in block.txs() {
             for consumes in tx.consumes().iter() {
-                self.process_spent(output.clone(), consumes, ctx, slot, rollback)
+                self.process_spent(output.clone(), consumes, ctx, slot, rollback, error_policy)
                     .await
                     .or_panic()?;
             }
