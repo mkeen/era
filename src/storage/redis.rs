@@ -1,5 +1,5 @@
+use std::str::FromStr;
 use std::sync::Arc;
-use std::{str::FromStr, time::Duration};
 
 use gasket::framework::*;
 use gasket::messaging::tokio::InputPort;
@@ -114,6 +114,7 @@ impl gasket::framework::Worker<Stage> for Worker {
 
     async fn execute(&mut self, unit: &CRDTCommand, stage: &mut Stage) -> Result<(), WorkerError> {
         match unit {
+            model::CRDTCommand::Noop => Ok(())?,
             model::CRDTCommand::BlockStarting(_) => {
                 // start redis transaction
                 redis::cmd("MULTI")

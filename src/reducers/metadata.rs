@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 
 use crate::crosscut;
 use crate::model::{CRDTCommand, Delta};
+use crate::prelude::*;
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
@@ -175,7 +176,7 @@ impl Reducer {
         rollback: bool,
         prefix: &str,
         royalty_prefix: &str,
-    ) -> Option<()> {
+    ) -> Result<(), gasket::error::Error> {
         if let Some(policy_assets) = self.find_metadata_policy_assets(&policy_map, &policy_id_str) {
             let filtered_policy_assets = policy_assets.iter().find(|(l, _)| {
                 let asset_label = self.get_asset_label(l.clone()).unwrap();
@@ -188,12 +189,12 @@ impl Reducer {
                     hex::encode(&asset_name_str).as_str(),
                 ]) {
                     let timestamp = self.time.slot_to_wallclock(slot_no);
-                    let metadata_final: Metadata = self.get_wrapped_metadata_fragment(
-                        cip,
-                        asset_name_str.clone(),
-                        policy_id_str.clone(),
-                        asset_metadata,
-                    );
+                    // let metadata_final: Metadata = self.get_wrapped_metadata_fragment(
+                    //     cip,
+                    //     asset_name_str.clone(),
+                    //     policy_id_str.clone(),
+                    //     asset_metadata,
+                    // );
 
                     let meta_payload = self.get_metadata_fragment(
                         asset_name_str,
@@ -202,80 +203,52 @@ impl Reducer {
                         cip,
                     );
 
-                    let mut out = output.lock().await;
-
-                    if !meta_payload.is_empty() {
-                        if cip == CIP27_META_ROYALTIES {
-                            if !rollback {
-                                out.send(
-                                    CRDTCommand::last_write_wins(
+                    if !meta_payload.is_empty()
+                        && (cip == CIP25_META_NFT || cip == CIP27_META_ROYALTIES)
+                    {
+                        output
+                            .lock()
+                            .await
+                            .send(gasket::messaging::Message::from(match cip {
+                                CIP27_META_ROYALTIES => match rollback {
+                                    false => CRDTCommand::last_write_wins(
                                         Some(&royalty_prefix),
                                         &policy_id_str,
                                         meta_payload,
                                         timestamp,
-                                    )
-                                    .into(),
-                                )
-                                .await
-                                .unwrap();
-                            } else {
-                                out.send(
-                                    CRDTCommand::sorted_set_remove(
+                                    ),
+                                    true => CRDTCommand::sorted_set_remove(
                                         Some(&royalty_prefix),
                                         &policy_id_str,
                                         meta_payload,
                                         Delta::from(timestamp as i64),
-                                    )
-                                    .into(),
-                                )
-                                .await
-                                .unwrap();
-                            }
-                        } else {
-                            if !rollback {
-                                out.send(
-                                    CRDTCommand::last_write_wins(
+                                    ),
+                                },
+
+                                CIP25_META_NFT => match rollback {
+                                    false => CRDTCommand::last_write_wins(
                                         Some(&prefix),
                                         &fingerprint_str,
                                         meta_payload,
                                         timestamp,
-                                    )
-                                    .into(),
-                                )
-                                .await
-                                .unwrap();
-                            } else {
-                                out.send(
-                                    CRDTCommand::sorted_set_remove(
+                                    ),
+
+                                    true => CRDTCommand::sorted_set_remove(
                                         Some(&prefix),
                                         &fingerprint_str,
                                         meta_payload,
                                         timestamp as i64,
-                                    )
-                                    .into(),
-                                )
-                                .await
-                                .unwrap();
-                            }
+                                    ),
+                                },
 
-                            out.send(
-                                CRDTCommand::last_write_wins(
-                                    Some(&prefix),
-                                    &policy_id_str,
-                                    fingerprint_str,
-                                    timestamp,
-                                )
-                                .into(),
-                            )
-                            .await
-                            .unwrap();
-                        }
+                                _ => CRDTCommand::noop(),
+                            }));
                     }
                 }
             }
         }
 
-        Some(())
+        Ok(())
     }
 
     pub async fn reduce<'b>(
@@ -287,8 +260,6 @@ impl Reducer {
     ) -> Result<(), gasket::framework::WorkerError> {
         let prefix = self.config.key_prefix.as_deref().unwrap_or("m");
         let royalty_prefix = self.config.royalty_key_prefix.as_deref().unwrap_or("m.r");
-
-        let mut operations = Vec::new();
 
         for tx in block.txs() {
             for asset_group in tx.mints() {
@@ -308,7 +279,7 @@ impl Reducer {
                                     .find(MetadatumLabel::from(supported_metadata_cip))
                                 {
                                     if quantity > -1 {
-                                        operations.push(self.extract_and_aggregate_cip_metadata(
+                                        self.extract_and_aggregate_cip_metadata(
                                             output.clone(),
                                             supported_metadata_cip,
                                             policy_map.clone(),
@@ -318,7 +289,9 @@ impl Reducer {
                                             rollback,
                                             prefix,
                                             royalty_prefix,
-                                        ));
+                                        )
+                                        .await
+                                        .unwrap_or(());
                                     }
                                 }
                             }
@@ -326,13 +299,6 @@ impl Reducer {
                     }
                 }
             }
-        }
-
-        for o in futures::future::join_all(operations).await {
-            match o {
-                None => None,
-                Some(r) => Some(r),
-            };
         }
 
         Ok(())

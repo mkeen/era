@@ -64,6 +64,7 @@ impl Reducer {
                     if let Some(txo) = ctx
                         .find_utxo(&input.output_ref())
                         .apply_policy(error_policy)
+                        .or_panic()
                         .unwrap()
                     {
                         let mut asset_names: Vec<String> = vec![];

@@ -142,7 +142,6 @@ pub enum CRDTCommand {
     GrowOnlySetAdd(Set, Member),
     LastWriteWins(Key, Value, Timestamp),
     AnyWriteWins(Key, Value),
-    // TODO make sure Value is a generic not stringly typed
     Spoil(Key),
     PNCounter(Key, Delta),
     HashCounter(Key, Member, Delta),
@@ -151,6 +150,7 @@ pub enum CRDTCommand {
     HashUnsetKey(Key, Member),
     UnsetKey(Key),
     BlockFinished(Point, Vec<u8>, bool),
+    Noop,
 }
 
 impl CRDTCommand {
@@ -178,6 +178,10 @@ impl CRDTCommand {
         };
 
         CRDTCommand::SetRemove(key, member)
+    }
+
+    pub fn noop() -> CRDTCommand {
+        CRDTCommand::Noop
     }
 
     pub fn sorted_set_add(

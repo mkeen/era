@@ -177,7 +177,7 @@ impl Reducer {
                     .into(),
                 )
                 .await
-                .unwrap();
+                .or_panic()?;
             }
         }
 
