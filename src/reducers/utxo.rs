@@ -204,11 +204,7 @@ impl Reducer {
         rollback: bool,
         error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
-        let utxo = ctx
-            .find_utxo(input)
-            .apply_policy(error_policy)
-            .or_panic()
-            .unwrap();
+        let utxo = ctx.find_utxo(input).apply_policy(error_policy).or_panic()?;
 
         let utxo = match utxo {
             Some(x) => x,
