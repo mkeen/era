@@ -56,8 +56,6 @@ impl Reducer {
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
-        let mut out = output.lock().await;
-
         for tx in block.txs().iter() {
             if rollback {
                 for input in tx.consumes() {
@@ -93,31 +91,45 @@ impl Reducer {
                         };
 
                         for asset_name in asset_names {
-                            out.send(
-                                model::CRDTCommand::any_write_wins(
-                                    Some(
-                                        self.config.key_prefix.clone().unwrap_or_default().as_str(),
-                                    ),
-                                    format!("${}", asset_name),
-                                    soa.to_string(),
+                            output
+                                .lock()
+                                .await
+                                .send(
+                                    model::CRDTCommand::any_write_wins(
+                                        Some(
+                                            self.config
+                                                .key_prefix
+                                                .clone()
+                                                .unwrap_or_default()
+                                                .as_str(),
+                                        ),
+                                        format!("${}", asset_name),
+                                        soa.to_string(),
+                                    )
+                                    .into(),
                                 )
-                                .into(),
-                            )
-                            .await
-                            .or_panic()?;
+                                .await
+                                .or_panic()?;
 
-                            out.send(
-                                model::CRDTCommand::any_write_wins(
-                                    Some(
-                                        self.config.key_prefix.clone().unwrap_or_default().as_str(),
-                                    ),
-                                    soa.to_string(),
-                                    format!("${}", asset_name),
+                            output
+                                .lock()
+                                .await
+                                .send(
+                                    model::CRDTCommand::any_write_wins(
+                                        Some(
+                                            self.config
+                                                .key_prefix
+                                                .clone()
+                                                .unwrap_or_default()
+                                                .as_str(),
+                                        ),
+                                        soa.to_string(),
+                                        format!("${}", asset_name),
+                                    )
+                                    .into(),
                                 )
-                                .into(),
-                            )
-                            .await
-                            .or_panic()?;
+                                .await
+                                .or_panic()?;
                         }
                     }
                 }
@@ -160,27 +172,37 @@ impl Reducer {
                     };
 
                     for asset_name in asset_names {
-                        out.send(
-                            model::CRDTCommand::any_write_wins(
-                                Some(self.config.key_prefix.clone().unwrap_or_default().as_str()),
-                                format!("${}", asset_name),
-                                soa.to_string(),
+                        output
+                            .lock()
+                            .await
+                            .send(
+                                model::CRDTCommand::any_write_wins(
+                                    Some(
+                                        self.config.key_prefix.clone().unwrap_or_default().as_str(),
+                                    ),
+                                    format!("${}", asset_name),
+                                    soa.to_string(),
+                                )
+                                .into(),
                             )
-                            .into(),
-                        )
-                        .await
-                        .unwrap();
+                            .await
+                            .unwrap();
 
-                        out.send(
-                            model::CRDTCommand::any_write_wins(
-                                Some(self.config.key_prefix.clone().unwrap_or_default().as_str()),
-                                soa.to_string(),
-                                format!("${}", asset_name),
+                        output
+                            .lock()
+                            .await
+                            .send(
+                                model::CRDTCommand::any_write_wins(
+                                    Some(
+                                        self.config.key_prefix.clone().unwrap_or_default().as_str(),
+                                    ),
+                                    soa.to_string(),
+                                    format!("${}", asset_name),
+                                )
+                                .into(),
                             )
-                            .into(),
-                        )
-                        .await
-                        .unwrap();
+                            .await
+                            .unwrap();
                     }
                 }
             }

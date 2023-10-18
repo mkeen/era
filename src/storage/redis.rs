@@ -96,12 +96,12 @@ impl gasket::framework::Worker<Stage> for Worker {
         log::debug!("starting redis");
         let connection = redis::Client::open(stage.config.connection_params.clone())
             .and_then(|c| c.get_connection())
-            .or_retry()
-            .unwrap()
-            .into();
+            .or_retry()?;
 
         log::debug!("redis connection opened");
-        Ok(Self { connection })
+        Ok(Self {
+            connection: Some(connection),
+        })
     }
 
     async fn schedule(

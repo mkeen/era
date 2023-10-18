@@ -52,7 +52,7 @@ fn to_zero_padded_string(point: &Point) -> String {
 
 impl BufferBlocks {
     fn open_db(config: BlockConfig) -> Self {
-        let db = sled::open(config.clone().db_path).or_retry().unwrap();
+        let db = sled::open(config.clone().db_path).unwrap();
         let queue: Vec<(String, Vec<u8>)> = Vec::default();
 
         BufferBlocks {

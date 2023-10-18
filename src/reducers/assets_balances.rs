@@ -150,34 +150,38 @@ impl Reducer {
 
         let prefix = self.config.key_prefix.clone().unwrap_or("w".to_string());
 
-        let out = &mut output.lock().await;
-
         if !fingerprint_tallies.is_empty() {
             for (soa, quantity_map) in fingerprint_tallies.clone() {
                 for (fingerprint, quantity) in quantity_map {
                     if !fingerprint.is_empty() {
-                        out.send(
-                            model::CRDTCommand::HashCounter(
-                                format!("{}.{}", prefix, soa),
-                                fingerprint.to_owned(),
-                                quantity,
+                        output
+                            .lock()
+                            .await
+                            .send(
+                                model::CRDTCommand::HashCounter(
+                                    format!("{}.{}", prefix, soa),
+                                    fingerprint.to_owned(),
+                                    quantity,
+                                )
+                                .into(),
                             )
-                            .into(),
-                        )
-                        .await
-                        .or_panic()?
+                            .await
+                            .or_panic()?
                     }
                 }
 
-                out.send(
-                    model::CRDTCommand::AnyWriteWins(
-                        format!("{}.l.{}", prefix, soa),
-                        self.time.slot_to_wallclock(slot).to_string().into(),
+                output
+                    .lock()
+                    .await
+                    .send(
+                        model::CRDTCommand::AnyWriteWins(
+                            format!("{}.l.{}", prefix, soa),
+                            self.time.slot_to_wallclock(slot).to_string().into(),
+                        )
+                        .into(),
                     )
-                    .into(),
-                )
-                .await
-                .or_panic()?;
+                    .await
+                    .or_panic()?;
             }
         }
 
@@ -185,31 +189,37 @@ impl Reducer {
             for (policy_id, asset_to_owner) in policy_asset_owners {
                 if spending {
                     // may have lost some stuff in this reducer around this area
-                    out.send(
-                        model::CRDTCommand::AnyWriteWins(
-                            format!("{}.lp.{}", prefix, policy_id),
-                            self.time.slot_to_wallclock(slot).to_string().into(),
+                    output
+                        .lock()
+                        .await
+                        .send(
+                            model::CRDTCommand::AnyWriteWins(
+                                format!("{}.lp.{}", prefix, policy_id),
+                                self.time.slot_to_wallclock(slot).to_string().into(),
+                            )
+                            .into(),
                         )
-                        .into(),
-                    )
-                    .await
-                    .or_panic()?;
+                        .await
+                        .or_panic()?;
                 }
 
                 for (fingerprint, soas) in asset_to_owner {
                     for (soa, quantity) in soas {
                         if !soa.is_empty() {
                             if quantity != 0 {
-                                out.send(
-                                    model::CRDTCommand::HashCounter(
-                                        format!("{}.owned.{}", prefix, fingerprint),
-                                        soa.clone(),
-                                        quantity,
+                                output
+                                    .lock()
+                                    .await
+                                    .send(
+                                        model::CRDTCommand::HashCounter(
+                                            format!("{}.owned.{}", prefix, fingerprint),
+                                            soa.clone(),
+                                            quantity,
+                                        )
+                                        .into(),
                                     )
-                                    .into(),
-                                )
-                                .await
-                                .or_panic()?;
+                                    .await
+                                    .or_panic()?;
                             }
                         }
                     }
