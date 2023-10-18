@@ -52,6 +52,8 @@ impl Reducer {
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
+        let out = &mut output.lock().await;
+
         for tx in block.txs() {
             if tx.is_valid() {
                 for cert in tx.certs() {
@@ -59,17 +61,11 @@ impl Reducer {
                         match cert {
                             alonzo::Certificate::StakeDelegation(cred, pool) => {
                                 if !rollback {
-                                    output
-                                        .lock()
-                                        .await
-                                        .send(self.registration(cred, pool).into())
+                                    out.send(self.registration(cred, pool).into())
                                         .await
                                         .or_panic()?;
                                 } else {
-                                    output
-                                        .lock()
-                                        .await
-                                        .send(self.deregistration(cred).into())
+                                    out.send(self.deregistration(cred).into())
                                         .await
                                         .or_panic()?;
                                 }
@@ -77,10 +73,7 @@ impl Reducer {
 
                             alonzo::Certificate::StakeDeregistration(cred) => {
                                 if !rollback {
-                                    output
-                                        .lock()
-                                        .await
-                                        .send(self.deregistration(cred).into())
+                                    out.send(self.deregistration(cred).into())
                                         .await
                                         .or_panic()?;
                                 }

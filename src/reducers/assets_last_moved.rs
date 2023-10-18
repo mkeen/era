@@ -55,9 +55,7 @@ impl Reducer {
             timestamp.to_string().into(),
         );
 
-        output.lock().await.send(crdt.into()).await?;
-
-        Ok(())
+        output.lock().await.send(crdt.into()).await
     }
 
     pub async fn reduce<'b>(
