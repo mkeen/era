@@ -193,7 +193,7 @@ impl Reducer {
                         .into(),
                     )
                     .await
-                    .unwrap();
+                    .or_panic()?;
                 }
 
                 for (fingerprint, soas) in asset_to_owner {
@@ -209,7 +209,7 @@ impl Reducer {
                                     .into(),
                                 )
                                 .await
-                                .unwrap();
+                                .or_panic()?;
                             }
                         }
                     }
