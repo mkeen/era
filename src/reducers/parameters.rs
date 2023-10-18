@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::crosscut::epochs::block_epoch;
 use crate::model::{CRDTCommand, Value};
-use crate::{crosscut, model};
+use crate::{crosscut, model, prelude::*};
 use gasket::messaging::tokio::OutputPort;
 use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
@@ -24,9 +24,9 @@ impl Reducer {
         &mut self,
         block: &'b MultiEraBlock<'b>,
         rollback: bool,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
-    ) -> Result<(), gasket::error::Error> {
+    ) -> Result<(), gasket::framework::WorkerError> {
         if rollback {
             return Ok(());
         }
@@ -65,11 +65,14 @@ impl Reducer {
             member_values.push(last_tx_hash.hash().to_string().into())
         }
 
-        let crdt = model::CRDTCommand::HashSetMulti(key, member_keys, member_values);
-
-        output.lock().await.send(crdt.into()).await.unwrap();
-
-        Ok(())
+        output
+            .lock()
+            .await
+            .send(gasket::messaging::Message::from(
+                model::CRDTCommand::HashSetMulti(key, member_keys, member_values),
+            ))
+            .await
+            .or_retry()
     }
 }
 

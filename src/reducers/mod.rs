@@ -71,9 +71,9 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         errs: &crosscut::policies::RuntimePolicy,
-    ) -> Result<(), gasket::error::Error> {
+    ) -> Result<(), gasket::framework::WorkerError> {
         match self {
             Reducer::UtxoOwners(x) => x.reduce(block, ctx, rollback, output, errs).await,
             Reducer::Utxo(x) => x.reduce(block, ctx, rollback, output, errs).await,

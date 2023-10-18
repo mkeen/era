@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use gasket::framework::AsWorkError;
 use gasket::messaging::tokio::OutputPort;
 use pallas::codec::utils::CborWrap;
 use pallas::crypto::hash::Hash;
@@ -109,16 +110,14 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
-    ) -> Result<(), gasket::error::Error> {
+    ) -> Result<(), gasket::framework::WorkerError> {
         if rollback {
             return Ok(());
         }
 
         let prefix = &self.config.key_prefix.clone().unwrap_or("tx".to_string());
-
-        let out = &mut output.lock().await;
 
         for tx in block.txs() {
             for consumed in tx.consumes() {
@@ -130,12 +129,15 @@ impl Reducer {
                         &tx,
                         &(output_ref.hash().clone(), output_ref.index().clone()),
                     ) {
-                        out.send(
-                            model::CRDTCommand::set_remove(Some(prefix), &key.as_str(), value)
-                                .into(),
-                        )
-                        .await
-                        .unwrap();
+                        output
+                            .lock()
+                            .await
+                            .send(
+                                model::CRDTCommand::set_remove(Some(prefix), &key.as_str(), value)
+                                    .into(),
+                            )
+                            .await
+                            .or_panic()?;
                     }
                 }
             }
@@ -144,9 +146,12 @@ impl Reducer {
                 let output_ref = (tx.hash().clone(), index as u64);
                 if let Some((key, value)) = self.get_key_value(&produced, &tx, &output_ref) {
                     log::warn!("i see a tx {:?}", prefix);
-                    out.send(model::CRDTCommand::set_add(Some(prefix), &key, value).into())
+                    output
+                        .lock()
                         .await
-                        .unwrap();
+                        .send(model::CRDTCommand::set_add(Some(prefix), &key, value).into())
+                        .await
+                        .or_panic()?;
                 }
             }
         }

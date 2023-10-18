@@ -11,7 +11,7 @@ use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
 
 use crate::model::CRDTCommand;
-use crate::{crosscut, model};
+use crate::{crosscut, model, prelude::*};
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
@@ -42,7 +42,7 @@ impl Reducer {
         policy: &Hash<28>,
         fingerprint: &str,
         timestamp: &str,
-        output: &mut super::OutputPort<model::CRDTCommand>,
+        output: Arc<Mutex<OutputPort<model::CRDTCommand>>>,
     ) -> Result<(), gasket::error::Error> {
         let key = match &self.config.key_prefix {
             Some(prefix) => prefix.to_string(),
@@ -55,7 +55,7 @@ impl Reducer {
             timestamp.to_string().into(),
         );
 
-        output.send(crdt.into()).await?;
+        output.lock().await.send(crdt.into()).await?;
 
         Ok(())
     }
@@ -63,11 +63,9 @@ impl Reducer {
     pub async fn reduce<'b>(
         &mut self,
         block: &'b MultiEraBlock<'b>,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
-    ) -> Result<(), gasket::error::Error> {
-        let out = &mut output.lock().await;
-
+    ) -> Result<(), gasket::framework::WorkerError> {
         for tx in block.txs().into_iter() {
             for (_, outp) in tx.produces().iter() {
                 for asset_group in outp.non_ada_assets() {
@@ -83,9 +81,10 @@ impl Reducer {
                                     &asset.policy(),
                                     &fingerprint,
                                     &self.time.slot_to_wallclock(block.slot()).to_string(),
-                                    out,
+                                    output.clone(),
                                 )
-                                .await?;
+                                .await
+                                .or_panic()?;
                             }
                         }
                     }

@@ -73,128 +73,119 @@ impl Reducer {
 
     async fn tx_state(
         &mut self,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         soa: &str,
         tx_str: &str,
         should_exist: bool,
-    ) -> Result<(), gasket::error::Error> {
-        let mut out = output.lock().await;
+    ) -> Result<(), gasket::framework::WorkerError> {
+        output
+            .lock()
+            .await
+            .send(gasket::messaging::Message::from(match should_exist {
+                true => CRDTCommand::set_add(
+                    self.config.key_prefix.clone().as_deref(),
+                    &soa,
+                    tx_str.to_string(),
+                ),
 
-        match should_exist {
-            true => {
-                let _ = out
-                    .send(
-                        model::CRDTCommand::set_add(
-                            self.config.key_prefix.clone().as_deref(),
-                            &soa,
-                            tx_str.to_string(),
-                        )
-                        .into(),
-                    )
-                    .await?;
-            }
-
-            _ => {
-                let _ = out
-                    .send(
-                        model::CRDTCommand::set_remove(
-                            self.config.key_prefix.clone().as_deref(),
-                            &soa,
-                            tx_str.to_string(),
-                        )
-                        .into(),
-                    )
-                    .await?;
-            }
-        }
-
-        Ok(())
+                _ => CRDTCommand::set_remove(
+                    self.config.key_prefix.clone().as_deref(),
+                    &soa,
+                    tx_str.to_string(),
+                ),
+            }))
+            .await
+            .or_retry()
     }
 
     async fn coin_state(
         &mut self,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         address: &str,
         tx_str: &str,
         lovelace_amt: &str,
         should_exist: bool,
-    ) -> Result<(), gasket::error::Error> {
-        let mut out = output.lock().await;
-        out.send(gasket::messaging::Message::from(match should_exist {
-            true => model::CRDTCommand::set_add(
-                self.config.coin_key_prefix.clone().as_deref(),
-                tx_str,
-                format!("{}/{}", address, lovelace_amt),
-            ),
+    ) -> Result<(), gasket::framework::WorkerError> {
+        output
+            .lock()
+            .await
+            .send(gasket::messaging::Message::from(match should_exist {
+                true => CRDTCommand::set_add(
+                    self.config.coin_key_prefix.clone().as_deref(),
+                    tx_str,
+                    format!("{}/{}", address, lovelace_amt),
+                ),
 
-            _ => model::CRDTCommand::set_remove(
-                self.config.coin_key_prefix.clone().as_deref(),
-                tx_str,
-                format!("{}/{}", address, lovelace_amt),
-            ),
-        }))
-        .await
+                _ => CRDTCommand::set_remove(
+                    self.config.coin_key_prefix.clone().as_deref(),
+                    tx_str,
+                    format!("{}/{}", address, lovelace_amt),
+                ),
+            }))
+            .await
+            .or_panic()
     }
 
     async fn token_state(
         &mut self,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         address: &str,
         tx_str: &str,
         policy_id: &str,
         fingerprint: &str,
         quantity: &str,
         should_exist: bool,
-    ) -> Result<(), gasket::error::Error> {
-        let mut out = output.lock().await;
+    ) -> Result<(), gasket::framework::WorkerError> {
+        output
+            .lock()
+            .await
+            .send(gasket::messaging::Message::from(match should_exist {
+                true => CRDTCommand::set_add(
+                    self.config.key_prefix.clone().as_deref(),
+                    tx_str,
+                    format!("{}/{}/{}/{}", address, policy_id, fingerprint, quantity),
+                ),
 
-        out.send(gasket::messaging::Message::from(match should_exist {
-            true => model::CRDTCommand::set_add(
-                self.config.key_prefix.clone().as_deref(),
-                tx_str,
-                format!("{}/{}/{}/{}", address, policy_id, fingerprint, quantity),
-            ),
-
-            _ => model::CRDTCommand::set_remove(
-                self.config.key_prefix.clone().as_deref(),
-                tx_str,
-                format!("{}/{}/{}/{}", address, policy_id, fingerprint, quantity),
-            ),
-        }))
-        .await
+                _ => CRDTCommand::set_remove(
+                    self.config.key_prefix.clone().as_deref(),
+                    tx_str,
+                    format!("{}/{}/{}/{}", address, policy_id, fingerprint, quantity),
+                ),
+            }))
+            .await
+            .or_panic()
     }
 
     async fn datum_state<'b>(
         &mut self,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         address: &str,
         tx_str: &str,
         utxo: &'b MultiEraOutput<'b>,
         should_exist: bool,
-    ) -> Result<(), gasket::error::Error> {
-        let mut out = output.lock().await;
-
+    ) -> Result<(), gasket::framework::WorkerError> {
         match utxo.datum() {
             Some(datum) => match datum {
                 pallas::ledger::primitives::babbage::PseudoDatumOption::Data(datum) => {
                     let raw_cbor_bytes: &[u8] = datum.0.raw_cbor();
 
-                    out.send(
-                        match should_exist {
-                            true => model::CRDTCommand::set_add(
+                    output
+                        .lock()
+                        .await
+                        .send(gasket::messaging::Message::from(match should_exist {
+                            true => CRDTCommand::set_add(
                                 self.config.datum_key_prefix.clone().as_deref(),
                                 tx_str,
                                 format!("{}/{}", address, hex::encode(raw_cbor_bytes)),
                             ),
-                            false => model::CRDTCommand::set_remove(
+                            false => CRDTCommand::set_remove(
                                 self.config.datum_key_prefix.clone().as_deref(),
                                 tx_str,
                                 format!("{}/{}", address, hex::encode(raw_cbor_bytes)),
                             ),
-                        }
-                        .into(),
-                    )
-                    .await?;
+                        }))
+                        .await
+                        .or_panic()?
                 }
 
                 _ => {}
@@ -209,10 +200,10 @@ impl Reducer {
         &mut self,
         ctx: &model::BlockContext,
         input: &OutputRef,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         rollback: bool,
         error_policy: &crosscut::policies::RuntimePolicy,
-    ) -> Result<(), gasket::error::Error> {
+    ) -> Result<(), gasket::framework::WorkerError> {
         let utxo = ctx
             .find_utxo(input)
             .apply_policy(error_policy)
@@ -229,24 +220,26 @@ impl Reducer {
         if let Ok(raw_address) = &utxo.address() {
             let soa = self.stake_or_address_from_address(raw_address);
             self.tx_state(
-                output,
+                output.clone(),
                 soa.as_str(),
                 &format!("{}#{}", input.hash(), input.index()),
                 rollback,
             )
-            .await?;
+            .await
+            .or_panic()?;
 
             self.datum_state(
-                output,
+                output.clone(),
                 soa.as_str(),
                 &format!("{}#{}", input.hash(), input.index()),
                 &utxo,
                 rollback,
             )
-            .await?;
+            .await
+            .or_panic()?;
 
             self.coin_state(
-                output,
+                output.clone(),
                 raw_address
                     .to_bech32()
                     .unwrap_or(raw_address.to_string())
@@ -255,7 +248,8 @@ impl Reducer {
                 utxo.lovelace_amount().to_string().as_str(),
                 rollback,
             )
-            .await?;
+            .await
+            .or_panic()?;
         }
 
         // Spend Native Tokens
@@ -272,7 +266,7 @@ impl Reducer {
                         // todo confirm this check is unneeded
                         if !fingerprint.is_empty() {
                             self.token_state(
-                                output,
+                                output.clone(),
                                 &address,
                                 format!("{}#{}", input.hash(), input.index()).as_str(),
                                 &hex::encode(policy_id),
@@ -280,7 +274,8 @@ impl Reducer {
                                 quantity.to_string().as_str(),
                                 rollback,
                             )
-                            .await?;
+                            .await
+                            .or_panic()?;
                         }
                     }
                 };
@@ -295,14 +290,14 @@ impl Reducer {
         tx_hash: &Hash<32>,
         tx_output: &'b MultiEraOutput<'b>,
         output_idx: usize,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         rollback: bool,
-    ) -> Result<(), gasket::error::Error> {
+    ) -> Result<(), gasket::framework::WorkerError> {
         if let Ok(raw_address) = &tx_output.address() {
             let tx_address = raw_address.to_bech32().unwrap_or(raw_address.to_string());
 
             self.coin_state(
-                output,
+                output.clone(),
                 &tx_address,
                 &format!("{}#{}", tx_hash, output_idx),
                 tx_output.lovelace_amount().to_string().as_str(),
@@ -311,7 +306,7 @@ impl Reducer {
             .await?;
 
             self.datum_state(
-                output,
+                output.clone(),
                 &tx_address,
                 &format!("{}#{}", tx_hash, output_idx),
                 &tx_output,
@@ -332,7 +327,7 @@ impl Reducer {
                         {
                             if !fingerprint.is_empty() {
                                 self.token_state(
-                                    output,
+                                    output.clone(),
                                     &tx_address,
                                     format!("{}#{}", tx_hash, output_idx).as_str(),
                                     &policy_id_str,
@@ -354,8 +349,7 @@ impl Reducer {
                 &format!("{}#{}", tx_hash, output_idx),
                 !rollback,
             )
-            .await
-            .unwrap();
+            .await?
         }
 
         Ok(())
@@ -366,18 +360,24 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
-    ) -> Result<(), gasket::error::Error> {
+    ) -> Result<(), gasket::framework::WorkerError> {
         for tx in block.txs() {
             for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
-                self.process_consumed_txo(&ctx, &consumed, output, rollback, error_policy)
+                self.process_consumed_txo(&ctx, &consumed, output.clone(), rollback, error_policy)
                     .await?
             }
 
             for (idx, produced) in tx.produces().iter() {
-                self.process_produced_txo(&tx.hash(), &produced, idx.clone(), output, rollback)
-                    .await?
+                self.process_produced_txo(
+                    &tx.hash(),
+                    &produced,
+                    idx.clone(),
+                    output.clone(),
+                    rollback,
+                )
+                .await?
             }
         }
 

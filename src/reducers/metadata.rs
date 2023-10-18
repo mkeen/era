@@ -166,7 +166,7 @@ impl Reducer {
 
     async fn extract_and_aggregate_cip_metadata(
         &self,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         cip: u64,
         policy_map: Metadatum,
         policy_id_str: String,
@@ -282,9 +282,9 @@ impl Reducer {
         &mut self,
         block: &MultiEraBlock<'b>,
         rollback: bool,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
-    ) -> Result<(), gasket::error::Error> {
+    ) -> Result<(), gasket::framework::WorkerError> {
         let prefix = self.config.key_prefix.as_deref().unwrap_or("m");
         let royalty_prefix = self.config.royalty_key_prefix.as_deref().unwrap_or("m.r");
 
@@ -309,7 +309,7 @@ impl Reducer {
                                 {
                                     if quantity > -1 {
                                         operations.push(self.extract_and_aggregate_cip_metadata(
-                                            output,
+                                            output.clone(),
                                             supported_metadata_cip,
                                             policy_map.clone(),
                                             policy_id_str.clone(),

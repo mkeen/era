@@ -12,6 +12,8 @@ use crate::model::CRDTCommand;
 
 use crate::crosscut;
 
+use crate::prelude::*;
+
 #[derive(Deserialize, Clone)]
 pub struct Config {
     pub key_prefix: Option<String>,
@@ -47,11 +49,9 @@ impl Reducer {
         &mut self,
         block: &'b MultiEraBlock<'b>,
         rollback: bool,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
-    ) -> Result<(), gasket::error::Error> {
-        let mut out = output.lock().await;
-
+    ) -> Result<(), gasket::framework::WorkerError> {
         for tx in block.txs() {
             if tx.is_valid() {
                 for cert in tx.certs() {
@@ -59,15 +59,30 @@ impl Reducer {
                         match cert {
                             alonzo::Certificate::StakeDelegation(cred, pool) => {
                                 if !rollback {
-                                    out.send(self.registration(cred, pool).into()).await?;
+                                    output
+                                        .lock()
+                                        .await
+                                        .send(self.registration(cred, pool).into())
+                                        .await
+                                        .or_panic()?;
                                 } else {
-                                    out.send(self.deregistration(cred).into()).await?;
+                                    output
+                                        .lock()
+                                        .await
+                                        .send(self.deregistration(cred).into())
+                                        .await
+                                        .or_panic()?;
                                 }
                             }
 
                             alonzo::Certificate::StakeDeregistration(cred) => {
                                 if !rollback {
-                                    out.send(self.deregistration(cred).into()).await?;
+                                    output
+                                        .lock()
+                                        .await
+                                        .send(self.deregistration(cred).into())
+                                        .await
+                                        .or_panic()?;
                                 }
                             }
 

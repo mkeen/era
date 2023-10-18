@@ -137,11 +137,11 @@ impl TuiConsole {
                             }
                             (_, "historic_blocks", Reading::Count(x)) => {
                                 self.historic_blocks.set_position(x);
-                                self.historic_blocks.set_message("available");
+                                self.historic_blocks.set_message("");
                             }
                             (_, "historic_blocks_removed", Reading::Count(x)) => {
                                 self.historic_blocks_removed.set_position(x);
-                                self.historic_blocks_removed.set_message("available");
+                                self.historic_blocks_removed.set_message("");
                             }
                             _ => (),
                         }

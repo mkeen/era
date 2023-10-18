@@ -133,13 +133,13 @@ impl Reducer {
 
     async fn process_asset_movement<'a>(
         &self,
-        output: &mut super::OutputPort<model::CRDTCommand>,
+        output: Arc<Mutex<OutputPort<model::CRDTCommand>>>,
         soa: &String,
         lovelace: u64,
         assets: &'a Vec<MultiEraPolicyAssets<'a>>,
         spending: bool,
         slot: u64,
-    ) -> Result<(), gasket::error::Error> {
+    ) -> Result<(), gasket::framework::WorkerError> {
         let adjusted_lovelace = match spending {
             true => -(lovelace as i64),
             false => lovelace as i64,
@@ -155,6 +155,8 @@ impl Reducer {
                 for (fingerprint, quantity) in quantity_map {
                     if !fingerprint.is_empty() {
                         output
+                            .lock()
+                            .await
                             .send(
                                 model::CRDTCommand::HashCounter(
                                     format!("{}.{}", prefix, soa),
@@ -164,11 +166,13 @@ impl Reducer {
                                 .into(),
                             )
                             .await
-                            .unwrap();
+                            .or_panic()?
                     }
                 }
 
                 output
+                    .lock()
+                    .await
                     .send(
                         model::CRDTCommand::AnyWriteWins(
                             format!("{}.l.{}", prefix, soa),
@@ -186,6 +190,8 @@ impl Reducer {
                 if spending {
                     // may have lost some stuff in this reducer around this area
                     output
+                        .lock()
+                        .await
                         .send(
                             model::CRDTCommand::AnyWriteWins(
                                 format!("{}.lp.{}", prefix, policy_id),
@@ -202,6 +208,8 @@ impl Reducer {
                         if !soa.is_empty() {
                             if quantity != 0 {
                                 output
+                                    .lock()
+                                    .await
                                     .send(
                                         model::CRDTCommand::HashCounter(
                                             format!("{}.owned.{}", prefix, fingerprint),
@@ -224,11 +232,11 @@ impl Reducer {
 
     async fn process_received<'a>(
         &self,
-        output: &mut OutputPort<CRDTCommand>,
+        output: Arc<Mutex<OutputPort<model::CRDTCommand>>>,
         meo: &'a MultiEraOutput<'a>,
         slot: u64,
         rollback: bool,
-    ) -> Result<(), gasket::error::Error> {
+    ) -> Result<(), gasket::framework::WorkerError> {
         let received_to_soa = self.stake_or_address_from_address(&meo.address().unwrap());
 
         self.process_asset_movement(
@@ -240,19 +248,16 @@ impl Reducer {
             slot,
         )
         .await
-        .unwrap();
-
-        Ok(())
     }
 
     async fn process_spent<'a>(
         &self,
-        output: &mut OutputPort<model::CRDTCommand>,
+        output: Arc<Mutex<OutputPort<model::CRDTCommand>>>,
         mei: &'a MultiEraInput<'a>,
         ctx: &model::BlockContext,
         slot: u64,
         rollback: bool,
-    ) -> Result<(), gasket::error::Error> {
+    ) -> Result<(), gasket::framework::WorkerError> {
         if let Ok(spent_output) = ctx.find_utxo(&mei.output_ref()) {
             let spent_from_soa =
                 self.stake_or_address_from_address(&spent_output.address().unwrap());
@@ -266,9 +271,7 @@ impl Reducer {
                 slot,
             )
             .await
-            .unwrap();
-
-            return Ok(());
+            .or_panic()?;
         }
 
         Ok(())
@@ -279,24 +282,22 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
-    ) -> Result<(), gasket::error::Error> {
+    ) -> Result<(), gasket::framework::WorkerError> {
         let slot = block.slot();
-
-        let out = &mut output.lock().await;
 
         for tx in block.txs() {
             for consumes in tx.consumes().iter() {
-                self.process_spent(out, consumes, ctx, slot, rollback)
+                self.process_spent(output.clone(), consumes, ctx, slot, rollback)
                     .await
-                    .unwrap();
+                    .or_panic()?;
             }
 
             for (_, utxo_produced) in tx.produces().iter() {
-                self.process_received(out, utxo_produced, slot, rollback)
+                self.process_received(output.clone(), utxo_produced, slot, rollback)
                     .await
-                    .unwrap();
+                    .or_panic()?;
             }
         }
 

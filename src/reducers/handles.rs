@@ -53,9 +53,9 @@ impl Reducer {
         block: &'b MultiEraBlock<'b>,
         ctx: &model::BlockContext,
         rollback: bool,
-        output: &Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &crosscut::policies::RuntimePolicy,
-    ) -> Result<(), gasket::error::Error> {
+    ) -> Result<(), gasket::framework::WorkerError> {
         let mut out = output.lock().await;
 
         for tx in block.txs().iter() {
@@ -64,7 +64,6 @@ impl Reducer {
                     if let Some(txo) = ctx
                         .find_utxo(&input.output_ref())
                         .apply_policy(error_policy)
-                        .or_retry()
                         .unwrap()
                     {
                         let mut asset_names: Vec<String> = vec![];
@@ -104,7 +103,7 @@ impl Reducer {
                                 .into(),
                             )
                             .await
-                            .unwrap();
+                            .or_panic()?;
 
                             out.send(
                                 model::CRDTCommand::any_write_wins(
@@ -117,7 +116,7 @@ impl Reducer {
                                 .into(),
                             )
                             .await
-                            .unwrap();
+                            .or_panic()?;
                         }
                     }
                 }

@@ -28,11 +28,11 @@ impl Worker {
         rollback: bool,
         ctx: &'b model::BlockContext,
         last_good_block_rollback_info: Option<(Point, u64)>,
-        output: &'b Arc<Mutex<OutputPort<CRDTCommand>>>,
+        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &'b crosscut::policies::RuntimePolicy,
         reducers: &'b mut Vec<Reducer>,
         ops_count: &gasket::metrics::Counter,
-    ) -> Option<u64> {
+    ) -> Result<u64, gasket::framework::WorkerError> {
         let point = match rollback {
             true => {
                 let (last_point, _) = last_good_block_rollback_info.clone().unwrap();
@@ -49,16 +49,12 @@ impl Worker {
             false => block_parsed.number(),
         };
 
-        match output {
-            _ => {
-                output
-                    .lock()
-                    .await
-                    .send(model::CRDTCommand::block_starting(&block_parsed).into())
-                    .await
-                    .unwrap();
-            }
-        }
+        output
+            .lock()
+            .await
+            .send(model::CRDTCommand::block_starting(&block_parsed).into())
+            .await
+            .or_panic()?;
 
         if rollback {
             log::warn!(
@@ -70,7 +66,13 @@ impl Worker {
 
         let mut handles = Vec::new();
         for reducer in reducers {
-            handles.push(reducer.reduce_block(&block_parsed, &ctx, rollback, output, error_policy));
+            handles.push(reducer.reduce_block(
+                &block_parsed,
+                &ctx,
+                rollback,
+                output.clone(),
+                error_policy,
+            ));
         }
 
         let results = futures::future::join_all(handles).await;
@@ -94,9 +96,9 @@ impl Worker {
                     .into(),
             )
             .await
-            .unwrap();
+            .expect("todo: handle error");
 
-        Some(number)
+        Ok(number)
     }
 }
 
@@ -180,7 +182,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                         false,
                         &ctx,
                         None,
-                        &stage.output,
+                        stage.output.clone(),
                         &stage.error_policy,
                         &mut stage.reducers,
                         &stage.ops_count,
@@ -197,7 +199,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                         true,
                         &ctx,
                         Some(last_block_rollback_info.clone()),
-                        &stage.output,
+                        stage.output.clone(),
                         &stage.error_policy,
                         &mut stage.reducers,
                         &stage.ops_count,
