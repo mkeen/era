@@ -82,8 +82,8 @@ impl Worker {
                 Ok(_) => {
                     ops_count.inc(1);
                 }
-                Err(_) => {
-                    panic!("Reducer error")
+                Err(e) => {
+                    panic!("Reducer error {:?}", e)
                 }
             };
         }
