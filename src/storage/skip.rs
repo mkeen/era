@@ -5,7 +5,7 @@ use gasket::messaging::tokio::InputPort;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
-use crate::{crosscut, model::CRDTCommand};
+use crate::{crosscut, model::CRDTCommand, pipeline::Context};
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
@@ -13,7 +13,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(self, blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>) -> Stage {
+    pub fn bootstrapper(self, ctx: Arc<Mutex<Context>>) -> Stage {
         let cursor = Cursor {
             last_point: Arc::new(Mutex::new(None)),
         };
@@ -22,7 +22,7 @@ impl Config {
             config: self.clone(),
             input: Default::default(),
             cursor,
-            blocks,
+            ctx,
             ops_count: Default::default(),
         }
     }
@@ -46,7 +46,7 @@ pub struct Worker {}
 pub struct Stage {
     config: Config,
     pub cursor: Cursor,
-    pub blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
+    pub ctx: Arc<Mutex<Context>>,
 
     pub input: InputPort<CRDTCommand>,
 

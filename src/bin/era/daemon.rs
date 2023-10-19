@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use clap;
 use era::{
     crosscut, enrich,
@@ -6,6 +8,7 @@ use era::{
 };
 use gasket::runtime::spawn_stage;
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
 #[derive(Deserialize)]
 #[serde(tag = "type")]
@@ -76,13 +79,13 @@ pub fn run(args: &Args) -> Result<(), era::Error> {
 
     spawn_stage(
         pipeline::Pipeline::bootstrap(
-            Context {
+            Arc::new(Mutex::new(Context {
                 chain: config.chain.unwrap_or_default().into(),
                 intersect: config.intersect,
                 finalize: config.finalize,
                 error_policy: config.policy.unwrap_or_default(),
-                block: config.blocks.unwrap(),
-            },
+                block_buffer: config.blocks.unwrap().into(),
+            })),
             config.source,
             config.enrich.unwrap_or_default(),
             config.reducers,

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::crosscut::epochs::block_epoch;
 use crate::model::{CRDTCommand, Value};
+use crate::pipeline::Context;
 use crate::{crosscut, model, prelude::*};
 use gasket::messaging::tokio::OutputPort;
 use pallas::ledger::traverse::MultiEraBlock;
@@ -16,7 +17,7 @@ pub struct Config {
 #[derive(Clone)]
 pub struct Reducer {
     config: Config,
-    chain: crosscut::ChainWellKnownInfo,
+    ctx: Arc<Mutex<Context>>,
 }
 
 impl Reducer {
@@ -25,7 +26,6 @@ impl Reducer {
         block: MultiEraBlock<'b>,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
         if rollback {
             return Ok(());
@@ -47,7 +47,7 @@ impl Reducer {
             "transactions_count".into(),
         ];
         let mut member_values = vec![
-            Value::BigInt(block_epoch(&self.chain, &block).into()),
+            Value::BigInt(block_epoch(&self.ctx.lock().await.chain, &block).into()),
             Value::BigInt(block.number().into()),
             Value::BigInt(block.slot().into()),
             block.hash().to_string().into(),
@@ -77,11 +77,8 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(self, chain: crosscut::ChainWellKnownInfo) -> super::Reducer {
-        let reducer = Reducer {
-            config: self,
-            chain,
-        };
+    pub fn plugin(self, ctx: Arc<Mutex<Context>>) -> super::Reducer {
+        let reducer = Reducer { config: self, ctx };
 
         super::Reducer::Parameters(reducer)
     }

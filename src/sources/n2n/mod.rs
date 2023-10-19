@@ -37,20 +37,16 @@ pub struct Config {
 impl Config {
     pub fn bootstrapper(
         self,
-        ctx: &pipeline::Context,
+        ctx: Arc<Mutex<pipeline::Context>>,
         cursor: Cursor,
-        blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
     ) -> chainsync::Stage {
         chainsync::Stage {
             config: self,
+            ctx,
             output: Default::default(),
             chain_tip: Default::default(),
             //last_block: Default::default(),
-            intersect: ctx.intersect.clone(),
-            chain: ctx.chain.clone(),
-            finalize: ctx.finalize.clone(),
             cursor,
-            blocks,
             historic_blocks_removed: Default::default(),
         }
     }

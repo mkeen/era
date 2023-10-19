@@ -71,7 +71,6 @@ impl Worker {
                 &ctx,
                 rollback.clone(),
                 output.clone(),
-                error_policy.clone(),
             ));
         }
 
@@ -102,8 +101,8 @@ impl Worker {
     }
 }
 
-pub async fn bootstrap(
-    ctx: &Context,
+pub fn bootstrap(
+    ctx: Arc<Mutex<Context>>,
     reducers: Vec<reducers::Config>,
     storage_input: &mut InputPort<CRDTCommand>,
 ) -> Stage {
@@ -111,16 +110,16 @@ pub async fn bootstrap(
     connect_ports(&mut output, storage_input, 100);
 
     let stage = Stage {
-        config: Config {
-            chain: ctx.chain.clone(),
-        },
-        reducers: reducers.into_iter().map(|x| x.bootstrapper(&ctx)).collect(),
+        ctx: ctx.clone(),
+        reducers: reducers
+            .into_iter()
+            .map(|x| x.bootstrapper(ctx.clone()))
+            .collect(),
         input: Default::default(),
         output: Arc::new(Mutex::new(output)),
         ops_count: Default::default(),
         last_block: Default::default(),
         historic_blocks: Default::default(),
-        error_policy: ctx.error_policy.clone(),
     };
 
     stage
@@ -133,10 +132,8 @@ pub async fn bootstrap(
     worker = "Worker"
 )]
 pub struct Stage {
-    config: Config,
-
     reducers: Vec<Reducer>,
-    error_policy: crosscut::policies::RuntimePolicy,
+    ctx: Arc<Mutex<Context>>,
 
     pub input: InputPort<EnrichedBlockPayload>,
     pub output: Arc<Mutex<OutputPort<CRDTCommand>>>,
@@ -172,6 +169,8 @@ impl gasket::framework::Worker<Stage> for Worker {
         unit: &EnrichedBlockPayload,
         stage: &mut Stage,
     ) -> Result<(), WorkerError> {
+        let error_policy = stage.ctx.lock().await.error_policy.clone();
+
         match unit {
             model::EnrichedBlockPayload::RollForward(block, ctx) => {
                 stage.historic_blocks.inc(1);
@@ -183,7 +182,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                         &ctx,
                         None,
                         stage.output.clone(),
-                        &stage.error_policy,
+                        &error_policy,
                         &mut stage.reducers,
                         &stage.ops_count,
                     )
@@ -200,7 +199,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                         &ctx,
                         Some(last_block_rollback_info.clone()),
                         stage.output.clone(),
-                        &stage.error_policy,
+                        &error_policy,
                         &mut stage.reducers,
                         &stage.ops_count,
                     )

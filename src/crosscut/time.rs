@@ -1,3 +1,9 @@
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
+
+use crate::pipeline::Context;
+
 use super::ChainWellKnownInfo;
 
 #[inline]
@@ -30,7 +36,9 @@ pub(crate) struct NaiveProvider {
 }
 
 impl NaiveProvider {
-    pub fn new(config: ChainWellKnownInfo) -> Self {
+    pub async fn new(ctx: Arc<Mutex<Context>>) -> Self {
+        let config = ctx.lock().await.chain.clone();
+
         assert!(
             config.byron_epoch_length > 0,
             "byron epoch length needs to be greater than zero"

@@ -59,7 +59,7 @@ fn asset_fingerprint(data_list: [&str; 2]) -> Result<String, bech32::Error> {
 #[derive(Clone)]
 pub struct Reducer {
     config: Config,
-    time: crosscut::time::NaiveProvider,
+    ctx: Arc<Mutex<Context>>,
 }
 
 impl Reducer {
@@ -139,6 +139,7 @@ impl Reducer {
         assets: &'a Vec<MultiEraPolicyAssets<'a>>,
         spending: bool,
         slot: u64,
+        time: u64,
     ) -> Result<(), gasket::framework::WorkerError> {
         let adjusted_lovelace = match spending {
             true => -(lovelace as i64),
@@ -176,7 +177,7 @@ impl Reducer {
                     .send(
                         model::CRDTCommand::AnyWriteWins(
                             format!("{}.l.{}", prefix, soa),
-                            self.time.slot_to_wallclock(slot).to_string().into(),
+                            time.to_string().into(),
                         )
                         .into(),
                     )
@@ -195,7 +196,7 @@ impl Reducer {
                         .send(
                             model::CRDTCommand::AnyWriteWins(
                                 format!("{}.lp.{}", prefix, policy_id),
-                                self.time.slot_to_wallclock(slot).to_string().into(),
+                                time.to_string().into(),
                             )
                             .into(),
                         )
@@ -236,6 +237,7 @@ impl Reducer {
         meo: &'a MultiEraOutput<'a>,
         slot: u64,
         rollback: bool,
+        timeslot: u64,
     ) -> Result<(), gasket::framework::WorkerError> {
         let received_to_soa = self.stake_or_address_from_address(&meo.address().unwrap());
 
@@ -246,6 +248,7 @@ impl Reducer {
             &meo.non_ada_assets(),
             rollback,
             slot,
+            timeslot,
         )
         .await
     }
@@ -258,6 +261,7 @@ impl Reducer {
         slot: u64,
         rollback: bool,
         error_policy: &crosscut::policies::RuntimePolicy,
+        timeslot: u64,
     ) -> Result<(), gasket::framework::WorkerError> {
         if let Some(spent_output) = ctx
             .find_utxo(&mei.output_ref())
@@ -274,6 +278,7 @@ impl Reducer {
                 &spent_output.non_ada_assets(),
                 !rollback,
                 slot,
+                timeslot,
             )
             .await
             .or_panic()?;
@@ -285,31 +290,40 @@ impl Reducer {
     pub async fn reduce<'b>(
         &mut self,
         block: MultiEraBlock<'b>,
-        ctx: &model::BlockContext,
+        block_ctx: &model::BlockContext,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
         let slot = block.slot();
+
+        let time_provider = crosscut::time::NaiveProvider::new(self.ctx.clone()).await;
+        let error_policy = self.ctx.lock().await.error_policy.clone();
 
         for tx in block.txs() {
             for consumes in tx.consumes().iter() {
                 self.process_spent(
                     output.clone(),
                     consumes,
-                    &ctx,
+                    &block_ctx,
                     slot,
                     rollback,
                     &error_policy,
+                    time_provider.slot_to_wallclock(slot),
                 )
                 .await
                 .or_panic()?;
             }
 
             for (_, utxo_produced) in tx.produces().iter() {
-                self.process_received(output.clone(), utxo_produced, slot, rollback)
-                    .await
-                    .or_panic()?;
+                self.process_received(
+                    output.clone(),
+                    utxo_produced,
+                    slot,
+                    rollback,
+                    time_provider.slot_to_wallclock(slot),
+                )
+                .await
+                .or_panic()?;
             }
         }
 
@@ -318,11 +332,8 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(self, ctx: &Context) -> super::Reducer {
-        let reducer = Reducer {
-            config: self,
-            time: crosscut::time::NaiveProvider::new(ctx.chain.clone()),
-        };
+    pub fn plugin(self, ctx: Arc<Mutex<Context>>) -> super::Reducer {
+        let reducer = Reducer { config: self, ctx };
 
         super::Reducer::AssetsBalances(reducer)
     }

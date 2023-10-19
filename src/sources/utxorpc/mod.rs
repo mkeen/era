@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use futures::StreamExt;
 use gasket::framework::*;
 
@@ -5,6 +7,7 @@ use gasket::messaging::tokio::OutputPort;
 use log::*;
 use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
+use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tonic::Streaming;
 
@@ -26,11 +29,11 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(self, ctx: &Context, cursor: Cursor) -> Stage {
+    pub fn bootstrapper(self, ctx: Arc<Mutex<Context>>, cursor: Cursor) -> Stage {
         Stage {
             config: self,
             cursor,
-            intersect: ctx.intersect.clone(),
+            ctx,
             output: Default::default(),
             block_count: Default::default(),
             chain_tip: Default::default(),
@@ -191,7 +194,7 @@ impl Worker {
 pub struct Stage {
     config: Config,
     cursor: Cursor,
-    intersect: crosscut::IntersectConfig,
+    ctx: Arc<Mutex<Context>>,
     pub output: OutputPort<RawBlockPayload>,
 
     #[metric]
@@ -210,7 +213,7 @@ impl gasket::framework::Worker<Stage> for Worker {
             .await
             .or_retry()?;
 
-        let mut point: Option<(u64, Vec<u8>)> = match stage.intersect.clone() {
+        let mut point: Option<(u64, Vec<u8>)> = match stage.ctx.lock().await.intersect.clone() {
             crosscut::IntersectConfig::Point(slot, hash) => Some((slot, hash.into())),
             _ => None,
         };

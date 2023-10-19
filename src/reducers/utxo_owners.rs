@@ -13,6 +13,7 @@ use serde_json::json;
 use tokio::sync::Mutex;
 
 use crate::model::CRDTCommand;
+use crate::pipeline::Context;
 use crate::{crosscut, model};
 
 use super::utils::AssetFingerprint;
@@ -27,6 +28,7 @@ pub struct Config {
 #[derive(Clone)]
 pub struct Reducer {
     config: Config,
+    ctx: Arc<Mutex<Context>>,
 }
 
 pub fn resolve_datum(utxo: &MultiEraOutput, tx: &MultiEraTx) -> Result<PlutusData, ()> {
@@ -108,10 +110,9 @@ impl Reducer {
     pub async fn reduce<'b>(
         &mut self,
         block: MultiEraBlock<'b>,
-        ctx: &model::BlockContext,
+        block_ctx: &model::BlockContext,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
         if rollback {
             return Ok(());
@@ -123,7 +124,7 @@ impl Reducer {
             for consumed in tx.consumes() {
                 let output_ref = consumed.output_ref();
 
-                if let Ok(utxo) = ctx.find_utxo(&output_ref) {
+                if let Ok(utxo) = block_ctx.find_utxo(&output_ref) {
                     if let Some((key, value)) = self.get_key_value(
                         &utxo,
                         &tx,
@@ -161,8 +162,8 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(self) -> super::Reducer {
-        let reducer = Reducer { config: self };
+    pub fn plugin(self, ctx: Arc<Mutex<Context>>) -> super::Reducer {
+        let reducer = Reducer { config: self, ctx };
 
         super::Reducer::UtxoOwners(reducer)
     }

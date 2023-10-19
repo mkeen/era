@@ -13,6 +13,7 @@ use gasket::messaging::tokio::OutputPort;
 use tokio::sync::Mutex;
 
 use crate::model::CRDTCommand;
+use crate::pipeline::Context;
 use crate::{crosscut, model, prelude::*};
 
 #[derive(Deserialize, Clone)]
@@ -35,6 +36,7 @@ impl Default for Config {
 #[derive(Clone)]
 pub struct Reducer {
     config: Config,
+    ctx: Arc<Mutex<Context>>,
 }
 
 // hash and index are stored in the key
@@ -358,14 +360,15 @@ impl Reducer {
     pub async fn reduce<'b>(
         &mut self,
         block: MultiEraBlock<'b>,
-        ctx: &model::BlockContext,
+        block_ctx: &model::BlockContext,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
+        let policy = self.ctx.lock().await.error_policy.clone();
+
         for tx in block.txs() {
             for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
-                self.process_consumed_txo(&ctx, &consumed, output.clone(), rollback, &error_policy)
+                self.process_consumed_txo(&block_ctx, &consumed, output.clone(), rollback, &policy)
                     .await?
             }
 
@@ -386,8 +389,8 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(self) -> super::Reducer {
-        let reducer = Reducer { config: self };
+    pub fn plugin(self, ctx: Arc<Mutex<Context>>) -> super::Reducer {
+        let reducer = Reducer { config: self, ctx };
 
         super::Reducer::Utxo(reducer)
     }

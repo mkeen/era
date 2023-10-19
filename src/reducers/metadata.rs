@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 
 use crate::crosscut;
 use crate::model::{CRDTCommand, Delta};
+use crate::pipeline::Context;
 use crate::prelude::*;
 
 #[derive(Deserialize, Clone)]
@@ -29,7 +30,7 @@ pub struct Config {
 #[derive(Clone)]
 pub struct Reducer {
     config: Config,
-    time: crosscut::time::NaiveProvider,
+    ctx: Arc<Mutex<Context>>,
 }
 
 const CIP25_META_NFT: u64 = 721;
@@ -148,6 +149,7 @@ impl Reducer {
         rollback: bool,
         prefix: &str,
         royalty_prefix: &str,
+        timestamp: u64,
     ) -> Result<(), gasket::error::Error> {
         if let Some(policy_assets) = self.find_metadata_policy_assets(&policy_map, &policy_id_str) {
             let filtered_policy_assets = policy_assets.iter().find(|(l, _)| {
@@ -160,7 +162,6 @@ impl Reducer {
                     &policy_id_str.clone(),
                     hex::encode(&asset_name_str).as_str(),
                 ]) {
-                    let timestamp = self.time.slot_to_wallclock(slot_no);
                     // let metadata_final: Metadata = self.get_wrapped_metadata_fragment(
                     //     cip,
                     //     asset_name_str.clone(),
@@ -229,10 +230,11 @@ impl Reducer {
         block: MultiEraBlock<'b>,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
         let prefix = self.config.key_prefix.as_deref().unwrap_or("m");
         let royalty_prefix = self.config.royalty_key_prefix.as_deref().unwrap_or("m.r");
+
+        let time_provider = crosscut::time::NaiveProvider::new(self.ctx.clone()).await;
 
         for tx in block.txs() {
             for asset_group in tx.mints() {
@@ -262,6 +264,7 @@ impl Reducer {
                                             rollback,
                                             prefix,
                                             royalty_prefix,
+                                            time_provider.slot_to_wallclock(block.slot().clone()),
                                         )
                                         .await
                                         .unwrap_or(());
@@ -279,11 +282,8 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(self, chain: crosscut::ChainWellKnownInfo) -> super::Reducer {
-        let worker = Reducer {
-            config: self,
-            time: crosscut::time::NaiveProvider::new(chain),
-        };
+    pub fn plugin(self, ctx: Arc<Mutex<Context>>) -> super::Reducer {
+        let worker = Reducer { config: self, ctx };
 
         super::Reducer::Metadata(worker)
     }

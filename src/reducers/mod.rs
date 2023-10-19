@@ -39,15 +39,15 @@ pub enum Config {
 }
 
 impl Config {
-    fn bootstrapper(self, ctx: &Context) -> Reducer {
+    fn bootstrapper(self, ctx: Arc<Mutex<Context>>) -> Reducer {
         match self {
-            Config::UtxoOwners(c) => c.plugin(),
-            Config::Utxo(c) => c.plugin(),
-            Config::Parameters(c) => c.plugin(ctx.chain.clone()),
-            Config::Metadata(c) => c.plugin(ctx.chain.clone()),
-            Config::AssetsLastMoved(c) => c.plugin(ctx.chain.clone()),
+            Config::UtxoOwners(c) => c.plugin(ctx),
+            Config::Utxo(c) => c.plugin(ctx),
+            Config::Parameters(c) => c.plugin(ctx),
+            Config::Metadata(c) => c.plugin(ctx),
+            Config::AssetsLastMoved(c) => c.plugin(ctx),
             Config::AssetsBalances(c) => c.plugin(ctx),
-            Config::Handles(c) => c.plugin(ctx.chain.clone()),
+            Config::Handles(c) => c.plugin(ctx),
             Config::StakeToPool(c) => c.plugin(),
         }
     }
@@ -69,20 +69,19 @@ impl Reducer {
     pub async fn reduce_block<'b>(
         &mut self,
         block: MultiEraBlock<'b>,
-        ctx: &model::BlockContext,
+        block_ctx: &model::BlockContext,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        errs: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
         match self {
-            Reducer::UtxoOwners(x) => x.reduce(block, ctx, rollback, output, errs).await,
-            Reducer::Utxo(x) => x.reduce(block, ctx, rollback, output, errs).await,
-            Reducer::Parameters(x) => x.reduce(block, rollback, output, errs).await,
-            Reducer::Metadata(x) => x.reduce(block, rollback, output, errs).await,
-            Reducer::AssetsLastMoved(x) => x.reduce(block, output, errs).await,
-            Reducer::AssetsBalances(x) => x.reduce(block, ctx, rollback, output, errs).await,
-            Reducer::Handle(x) => x.reduce(block, ctx, rollback, output, errs).await,
-            Reducer::StakeToPool(x) => x.reduce(block, rollback, output, errs).await,
+            Reducer::UtxoOwners(x) => x.reduce(block, block_ctx, rollback, output).await,
+            Reducer::Utxo(x) => x.reduce(block, block_ctx, rollback, output).await,
+            Reducer::Parameters(x) => x.reduce(block, rollback, output).await,
+            Reducer::Metadata(x) => x.reduce(block, rollback, output).await,
+            Reducer::AssetsLastMoved(x) => x.reduce(block, output).await,
+            Reducer::AssetsBalances(x) => x.reduce(block, block_ctx, rollback, output).await,
+            Reducer::Handle(x) => x.reduce(block, block_ctx, rollback, output).await,
+            Reducer::StakeToPool(x) => x.reduce(block, rollback, output).await,
         }
     }
 }

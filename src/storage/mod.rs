@@ -12,7 +12,8 @@ use tokio::sync::Mutex;
 
 use crate::{
     crosscut::{self, PointArg},
-    model, pipeline,
+    model,
+    pipeline::{self, Context},
 };
 
 #[derive(Deserialize, Clone)]
@@ -34,22 +35,13 @@ pub enum Stage {
 }
 
 impl Config {
-    pub fn bootstrapper(
-        self,
-        blocks_config: crosscut::historic::BlockConfig,
-    ) -> Option<Bootstrapper> {
+    pub fn bootstrapper(self, ctx: Arc<Mutex<Context>>) -> Option<Bootstrapper> {
         match self {
-            Config::Skip(c) => Some(Bootstrapper::Skip(c.bootstrapper(Arc::new(Mutex::new(
-                crosscut::historic::BufferBlocks::from(blocks_config),
-            ))))),
-            Config::Redis(c) => Some(Bootstrapper::Redis(c.bootstrapper(Arc::new(Mutex::new(
-                crosscut::historic::BufferBlocks::from(blocks_config),
-            ))))),
+            Config::Skip(c) => Some(Bootstrapper::Skip(c.bootstrapper(ctx))),
+            Config::Redis(c) => Some(Bootstrapper::Redis(c.bootstrapper(ctx))),
 
             #[cfg(feature = "elastic")]
-            Config::Elastic(c) => Some(Bootstrapper::Elastic(c.bootstrapper(Arc::new(
-                Mutex::new(crosscut::historic::BufferBlocks::from(blocks_config)),
-            )))),
+            Config::Elastic(c) => Some(Bootstrapper::Elastic(c.bootstrapper(ctx))),
         }
     }
 }
@@ -99,14 +91,6 @@ impl Bootstrapper {
             Bootstrapper::Skip(s) => &mut s.input,
             Bootstrapper::Redis(s) => &mut s.input,
             Bootstrapper::Elastic(s) => &mut s.input,
-        }
-    }
-
-    pub fn borrow_blocks(&mut self) -> Arc<Mutex<crosscut::historic::BufferBlocks>> {
-        match self {
-            Bootstrapper::Skip(s) => s.blocks.clone(),
-            Bootstrapper::Redis(s) => s.blocks.clone(),
-            Bootstrapper::Elastic(s) => s.blocks.clone(),
         }
     }
 

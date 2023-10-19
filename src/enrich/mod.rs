@@ -1,12 +1,15 @@
 pub mod skip;
 pub mod sled;
 
+use std::sync::Arc;
+
 use serde::Deserialize;
 
 use gasket::{
     messaging::tokio::{InputPort, OutputPort},
     runtime::Tether,
 };
+use tokio::sync::Mutex;
 
 use crate::{model, pipeline};
 
@@ -24,10 +27,14 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn bootstrapper(self, ctx: &pipeline::Context) -> Option<Bootstrapper> {
+    pub fn bootstrapper(
+        self,
+        ctx: Arc<Mutex<pipeline::Context>>,
+        rollback_db_path: String,
+    ) -> Option<Bootstrapper> {
         Some(match self {
             Config::Skip(w) => Bootstrapper::Skip(w.bootstrapper()),
-            Config::Sled(w) => Bootstrapper::Sled(w.bootstrapper(ctx)),
+            Config::Sled(w) => Bootstrapper::Sled(w.bootstrapper(ctx, rollback_db_path)),
         })
     }
 }

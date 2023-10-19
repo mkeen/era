@@ -9,6 +9,7 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 
 use crate::model::{CRDTCommand, Member, Value};
+use crate::pipeline::Context;
 use crate::{crosscut, model};
 
 impl ToRedisArgs for model::Value {
@@ -32,7 +33,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(&self, blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>) -> Stage {
+    pub fn bootstrapper(&self, ctx: Arc<Mutex<Context>>) -> Stage {
         Stage {
             config: self.clone(),
             cursor: Cursor {
@@ -40,7 +41,7 @@ impl Config {
             },
             input: Default::default(),
             storage_ops: Default::default(),
-            blocks,
+            ctx,
         }
     }
 
@@ -78,7 +79,7 @@ impl Cursor {
 pub struct Stage {
     config: Config,
     pub cursor: Cursor,
-    pub blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
+    pub ctx: Arc<Mutex<Context>>,
 
     pub input: InputPort<CRDTCommand>,
 
@@ -305,7 +306,12 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .or_restart()?;
 
                 if !rollback {
-                    stage.blocks.lock().await.insert_block(&point, &block_bytes);
+                    stage
+                        .ctx
+                        .lock()
+                        .await
+                        .block_buffer
+                        .insert_block(&point, &block_bytes);
                 }
             }
         };

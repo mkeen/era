@@ -11,6 +11,7 @@ use gasket::framework::*;
 use tokio::sync::Mutex;
 
 use crate::model::RawBlockPayload;
+use crate::pipeline::Context;
 use crate::{crosscut, model, sources, storage, Error};
 
 use crate::prelude::*;
@@ -36,10 +37,7 @@ impl Worker {}
 pub struct Stage {
     pub config: sources::n2n::Config,
     pub cursor: storage::Cursor,
-    pub intersect: crosscut::IntersectConfig,
-    pub chain: crosscut::ChainWellKnownInfo,
-    pub blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
-    pub finalize: Option<crosscut::FinalizeConfig>,
+    pub ctx: Arc<Mutex<Context>>,
 
     pub output: OutputPort<RawBlockPayload>,
 
@@ -53,9 +51,10 @@ pub struct Stage {
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Worker {
     async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
-        let peer_session = PeerClient::connect(&stage.config.address, stage.chain.magic)
-            .await
-            .unwrap();
+        let peer_session =
+            PeerClient::connect(&stage.config.address, stage.ctx.lock().await.chain.magic)
+                .await
+                .unwrap();
 
         let mut worker = Self {
             min_depth: stage.config.min_depth.unwrap_or(10 as usize),
@@ -74,7 +73,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .map_err(crate::Error::ouroboros)
                     .unwrap();
             }
-            None => match &stage.intersect {
+            None => match &stage.ctx.lock().await.intersect {
                 crosscut::IntersectConfig::Origin => {
                     peer.chainsync
                         .intersect_origin()
@@ -90,7 +89,13 @@ impl gasket::framework::Worker<Stage> for Worker {
                         .unwrap();
                 }
                 crosscut::IntersectConfig::Point(_, _) => {
-                    let point = &stage.intersect.get_point().expect("point value");
+                    let point = &stage
+                        .ctx
+                        .lock()
+                        .await
+                        .intersect
+                        .get_point()
+                        .expect("point value");
                     peer.chainsync
                         .find_intersect(vec![point.clone()])
                         .await
@@ -98,7 +103,13 @@ impl gasket::framework::Worker<Stage> for Worker {
                         .unwrap();
                 }
                 crosscut::IntersectConfig::Fallbacks(_) => {
-                    let points = &stage.intersect.get_fallbacks().expect("fallback values");
+                    let points = &stage
+                        .ctx
+                        .lock()
+                        .await
+                        .intersect
+                        .get_fallbacks()
+                        .expect("fallback values");
                     peer.chainsync
                         .find_intersect(points.clone())
                         .await
@@ -129,7 +140,7 @@ impl gasket::framework::Worker<Stage> for Worker {
         Ok(WorkSchedule::Unit(match peer.chainsync.has_agency() {
             true => match peer.chainsync.request_next().await.or_restart() {
                 Ok(next) => {
-                    let mut blocks_client = stage.blocks.lock().await;
+                    let mut blocks_client = &mut stage.ctx.lock().await.block_buffer;
 
                     match next {
                         NextResponse::RollForward(h, t) => {
@@ -229,7 +240,7 @@ impl gasket::framework::Worker<Stage> for Worker {
             },
             false => match peer.chainsync.recv_while_must_reply().await.or_restart() {
                 Ok(n) => {
-                    let mut blocks_client = stage.blocks.lock().await;
+                    let mut blocks_client = &mut stage.ctx.lock().await.block_buffer;
                     let mut blocks = flush_buffered_blocks(&mut blocks_client).await;
 
                     match n {
@@ -262,7 +273,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                         }
                         NextResponse::RollBackward(p, t) => {
                             log::warn!("rolling back");
-                            let mut blocks_client = stage.blocks.lock().await;
 
                             blocks_client.enqueue_rollback_batch(&p);
 

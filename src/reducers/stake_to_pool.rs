@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use pallas::ledger::primitives::alonzo;
-use pallas::ledger::primitives::alonzo::{PoolKeyhash, StakeCredential};
+use pallas::ledger::primitives::alonzo::{self, PoolKeyhash, StakeCredential};
 use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
 
@@ -9,8 +8,6 @@ use gasket::messaging::tokio::OutputPort;
 use tokio::sync::Mutex;
 
 use crate::model::CRDTCommand;
-
-use crate::crosscut;
 
 use crate::prelude::*;
 
@@ -50,7 +47,6 @@ impl Reducer {
         block: MultiEraBlock<'b>,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
         for tx in block.txs() {
             if tx.is_valid() {

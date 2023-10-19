@@ -11,6 +11,7 @@ use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
 
 use crate::model::CRDTCommand;
+use crate::pipeline::Context;
 use crate::{crosscut, model, prelude::*};
 
 #[derive(Deserialize, Clone)]
@@ -33,7 +34,7 @@ fn asset_fingerprint(data_list: [&str; 2]) -> Result<String, bech32::Error> {
 #[derive(Clone)]
 pub struct Reducer {
     config: Config,
-    time: crosscut::time::NaiveProvider,
+    ctx: Arc<Mutex<Context>>,
 }
 
 impl Reducer {
@@ -64,8 +65,9 @@ impl Reducer {
         &mut self,
         block: MultiEraBlock<'b>,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
+        let time_provider = crosscut::time::NaiveProvider::new(self.ctx.clone()).await;
+
         for tx in block.txs().into_iter() {
             for (_, outp) in tx.produces().iter() {
                 for asset_group in outp.non_ada_assets() {
@@ -80,7 +82,7 @@ impl Reducer {
                                 self.process_asset(
                                     &asset.policy(),
                                     &fingerprint,
-                                    &self.time.slot_to_wallclock(block.slot()).to_string(),
+                                    &time_provider.slot_to_wallclock(block.slot()).to_string(),
                                     output.clone(),
                                 )
                                 .await
@@ -97,11 +99,8 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(self, chain: crosscut::ChainWellKnownInfo) -> super::Reducer {
-        let reducer = Reducer {
-            config: self,
-            time: crosscut::time::NaiveProvider::new(chain.clone()),
-        };
+    pub fn plugin(self, ctx: Arc<Mutex<Context>>) -> super::Reducer {
+        let reducer = Reducer { config: self, ctx };
 
         super::Reducer::AssetsLastMoved(reducer)
     }

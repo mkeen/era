@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 use crate::{
     crosscut,
     model::{self, CRDTCommand},
+    pipeline::Context,
     Error,
 };
 
@@ -40,13 +41,13 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(self, blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>) -> Stage {
+    pub fn bootstrapper(self, ctx: Arc<Mutex<Context>>) -> Stage {
         Stage {
             config: self.clone(),
             input: Default::default(),
             ops_count: Default::default(),
             cursor: Cursor {},
-            blocks,
+            ctx,
         }
     }
 }
@@ -152,7 +153,7 @@ async fn apply_batch(batch: Batch, client: &Elasticsearch) -> Result<(), gasket:
 pub struct Stage {
     config: Config,
     pub cursor: Cursor,
-    pub blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
+    pub ctx: Arc<Mutex<Context>>,
 
     pub input: InputPort<CRDTCommand>,
 

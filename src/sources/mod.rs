@@ -24,14 +24,13 @@ pub enum Config {
 impl Config {
     pub fn bootstrapper(
         self,
-        ctx: &pipeline::Context,
+        ctx: Arc<Mutex<pipeline::Context>>,
         cursor: Cursor,
-        blocks: Arc<Mutex<crosscut::historic::BufferBlocks>>,
     ) -> Option<Bootstrapper> {
         match self {
-            Config::N2N(c) => Some(Bootstrapper::N2N(c.bootstrapper(ctx, cursor, blocks))),
+            Config::N2N(c) => Some(Bootstrapper::N2N(c.bootstrapper(ctx, cursor))),
             Config::UTXORPC(c) => Some(Bootstrapper::UTXORPC(c.bootstrapper(ctx, cursor))),
-            Config::N2C(c) => Some(Bootstrapper::N2C(c.bootstrapper(ctx, cursor, blocks))),
+            Config::N2C(c) => Some(Bootstrapper::N2C(c.bootstrapper(ctx, cursor))),
         }
     }
 }
@@ -48,14 +47,6 @@ impl Bootstrapper {
             Bootstrapper::N2C(s) => &mut s.output,
             Bootstrapper::N2N(s) => &mut s.output,
             Bootstrapper::UTXORPC(s) => &mut s.output,
-        }
-    }
-
-    pub fn borrow_blocks(self) -> Option<Arc<Mutex<crosscut::historic::BufferBlocks>>> {
-        match self {
-            Bootstrapper::N2C(s) => Some(s.blocks),
-            Bootstrapper::N2N(s) => Some(s.blocks),
-            Bootstrapper::UTXORPC(_) => None,
         }
     }
 

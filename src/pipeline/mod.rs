@@ -1,5 +1,7 @@
 pub mod console;
 
+use std::sync::Arc;
+
 use crate::{crosscut, enrich, reducers, sources, storage};
 
 use gasket::{
@@ -8,11 +10,12 @@ use gasket::{
     retries,
     runtime::{spawn_stage, Policy, Tether},
 };
+use tokio::sync::Mutex;
 
 #[derive(Stage)]
 #[stage(name = "pipeline-bootstrapper", unit = "()", worker = "Pipeline")]
 pub struct Stage {
-    pub ctx: Option<Context>,
+    pub ctx: Arc<Mutex<Context>>,
     pub sources_config: Option<sources::Config>,
     pub enrich_config: Option<enrich::Config>,
     pub reducer_config: Option<Vec<reducers::Config>>,
@@ -38,32 +41,36 @@ impl gasket::framework::Worker<Stage> for Pipeline {
         };
 
         let enrich = stage.enrich_config.clone().unwrap();
-        let mut enrich_stage = enrich.bootstrapper(&stage.ctx.clone().unwrap()).unwrap();
+
+        let rollback_db_path = stage
+            .ctx
+            .lock()
+            .await
+            .block_buffer
+            .config
+            .rollback_db_path
+            .clone();
+
+        let mut enrich_stage = enrich
+            .bootstrapper(stage.ctx.clone(), rollback_db_path)
+            .unwrap();
 
         let enrich_input_port = enrich_stage.borrow_input_port();
 
         let storage = stage.storage_config.as_ref().unwrap();
-        let mut storage_stage = storage
-            .clone()
-            .bootstrapper(stage.ctx.clone().unwrap().block)
-            .unwrap();
+        let mut storage_stage = storage.clone().bootstrapper(stage.ctx.clone()).unwrap();
 
         let source = stage.sources_config.as_ref().unwrap();
         let mut source_stage = source
             .clone()
-            .bootstrapper(
-                &stage.ctx.clone().unwrap(),
-                storage_stage.build_cursor(),
-                storage_stage.borrow_blocks(),
-            )
+            .bootstrapper(stage.ctx.clone(), storage_stage.build_cursor())
             .unwrap();
 
         let mut reducer = reducers::worker::bootstrap(
-            &stage.ctx.as_ref().unwrap(),
+            stage.ctx.clone(),
             stage.reducer_config.clone().unwrap(),
             storage_stage.borrow_input_port(),
-        )
-        .await;
+        );
 
         connect_ports(source_stage.borrow_output_port(), enrich_input_port, 100);
         connect_ports(enrich_stage.borrow_output_port(), &mut reducer.input, 100);
@@ -92,7 +99,7 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub fn bootstrap(
-        ctx: Context,
+        ctx: Arc<Mutex<Context>>,
         sources_config: sources::Config,
         enrich_config: enrich::Config,
         reducer_config: Vec<reducers::Config>,
@@ -100,7 +107,7 @@ impl Pipeline {
         args_console: console::Mode,
     ) -> Stage {
         Stage {
-            ctx: Some(ctx),
+            ctx,
             sources_config: Some(sources_config),
             storage_config: Some(storage_config),
             enrich_config: Some(enrich_config),
@@ -141,6 +148,6 @@ pub struct Context {
     pub chain: crosscut::ChainWellKnownInfo,
     pub intersect: crosscut::IntersectConfig,
     pub finalize: Option<crosscut::FinalizeConfig>,
-    pub block: crosscut::historic::BlockConfig,
+    pub block_buffer: crosscut::historic::BufferBlocks,
     pub error_policy: crosscut::policies::RuntimePolicy,
 }

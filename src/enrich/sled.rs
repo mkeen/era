@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use gasket::framework::*;
 
 use gasket::messaging::tokio::{InputPort, OutputPort};
@@ -10,8 +12,10 @@ use pallas::{
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 use sled::IVec;
+use tokio::sync::Mutex;
 
 use crate::crosscut;
+use crate::pipeline::Context;
 use crate::{
     model::{self, BlockContext, EnrichedBlockPayload, RawBlockPayload},
     pipeline,
@@ -24,8 +28,12 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(mut self, ctx: &pipeline::Context) -> Stage {
-        self.rollback_db_path = Some(ctx.block.rollback_db_path.clone());
+    pub fn bootstrapper(
+        mut self,
+        ctx: Arc<Mutex<pipeline::Context>>,
+        rollback_db_path: String,
+    ) -> Stage {
+        self.rollback_db_path = Some(rollback_db_path);
 
         Stage {
             config: self,
@@ -36,7 +44,7 @@ impl Config {
             enrich_matches: Default::default(),
             enrich_mismatches: Default::default(),
             enrich_blocks: Default::default(),
-            policy: ctx.error_policy.clone(),
+            ctx,
         }
     }
 }
@@ -260,7 +268,7 @@ impl Worker {
 pub struct Stage {
     pub config: Config,
 
-    pub policy: crosscut::policies::RuntimePolicy,
+    pub ctx: Arc<Mutex<Context>>,
 
     pub input: InputPort<RawBlockPayload>,
     pub output: OutputPort<EnrichedBlockPayload>,

@@ -8,6 +8,7 @@ use gasket::messaging::tokio::OutputPort;
 use tokio::sync::Mutex;
 
 use crate::model::CRDTCommand;
+use crate::pipeline::Context;
 use crate::{crosscut, model, prelude::*};
 
 use super::utils::AssetFingerprint;
@@ -30,6 +31,7 @@ impl Default for Config {
 #[derive(Clone)]
 pub struct Reducer {
     config: Config,
+    ctx: Arc<Mutex<Context>>,
 }
 
 impl Reducer {
@@ -54,8 +56,9 @@ impl Reducer {
         ctx: &model::BlockContext,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
+        let error_policy = self.ctx.lock().await.error_policy.clone();
+
         for tx in block.txs().iter() {
             if rollback {
                 for input in tx.consumes() {
@@ -211,12 +214,13 @@ impl Reducer {
 }
 
 impl Config {
-    pub fn plugin(self, chain: crosscut::ChainWellKnownInfo) -> super::Reducer {
+    pub fn plugin(self, ctx: Arc<Mutex<Context>>) -> super::Reducer {
         let reducer = Reducer {
             config: Self {
                 key_prefix: self.key_prefix,
-                policy_id: Some(chain.adahandle_policy),
+                policy_id: self.policy_id,
             },
+            ctx,
         };
         super::Reducer::Handle(reducer)
     }
