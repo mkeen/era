@@ -76,7 +76,7 @@ pub fn run(args: &Args) -> Result<(), era::Error> {
 
     spawn_stage(
         pipeline::Pipeline::bootstrap(
-            &Context {
+            Context {
                 chain: config.chain.unwrap_or_default().into(),
                 intersect: config.intersect,
                 finalize: config.finalize,

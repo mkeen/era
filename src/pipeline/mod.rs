@@ -92,19 +92,19 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub fn bootstrap(
-        ctx: &Context,
+        ctx: Context,
         sources_config: sources::Config,
         enrich_config: enrich::Config,
-        config_reducer: Vec<reducers::Config>,
+        reducer_config: Vec<reducers::Config>,
         storage_config: storage::Config,
         args_console: console::Mode,
     ) -> Stage {
         Stage {
-            ctx: Some(ctx.clone()),
+            ctx: Some(ctx),
             sources_config: Some(sources_config),
             storage_config: Some(storage_config),
             enrich_config: Some(enrich_config),
-            reducer_config: Some(config_reducer),
+            reducer_config: Some(reducer_config),
             args_console: Some(args_console),
         }
     }
