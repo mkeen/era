@@ -289,7 +289,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     payload: raw_block_payload.clone(),
                 })
                 .await
-                .or_retry();
+                .or_panic()?;
         }
 
         Ok(())
