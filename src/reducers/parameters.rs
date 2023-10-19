@@ -22,10 +22,10 @@ pub struct Reducer {
 impl Reducer {
     pub async fn reduce<'b>(
         &mut self,
-        block: &'b MultiEraBlock<'b>,
+        block: MultiEraBlock<'b>,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: &crosscut::policies::RuntimePolicy,
+        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
         if rollback {
             return Ok(());
@@ -47,7 +47,7 @@ impl Reducer {
             "transactions_count".into(),
         ];
         let mut member_values = vec![
-            Value::BigInt(block_epoch(&self.chain, block).into()),
+            Value::BigInt(block_epoch(&self.chain, &block).into()),
             Value::BigInt(block.number().into()),
             Value::BigInt(block.slot().into()),
             block.hash().to_string().into(),

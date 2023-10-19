@@ -68,11 +68,11 @@ pub enum Reducer {
 impl Reducer {
     pub async fn reduce_block<'b>(
         &mut self,
-        block: &'b MultiEraBlock<'b>,
-        ctx: &model::BlockContext,
+        block: MultiEraBlock<'b>,
+        ctx: model::BlockContext,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        errs: &crosscut::policies::RuntimePolicy,
+        errs: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
         match self {
             Reducer::UtxoOwners(x) => x.reduce(block, ctx, rollback, output, errs).await,

@@ -107,11 +107,11 @@ impl Reducer {
 
     pub async fn reduce<'b>(
         &mut self,
-        block: &'b MultiEraBlock<'b>,
-        ctx: &model::BlockContext,
+        block: MultiEraBlock<'b>,
+        ctx: model::BlockContext,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: &crosscut::policies::RuntimePolicy,
+        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
         if rollback {
             return Ok(());

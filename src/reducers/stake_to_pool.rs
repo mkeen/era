@@ -47,10 +47,10 @@ impl Reducer {
 
     pub async fn reduce<'b>(
         &mut self,
-        block: &'b MultiEraBlock<'b>,
+        block: MultiEraBlock<'b>,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: &crosscut::policies::RuntimePolicy,
+        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
         for tx in block.txs() {
             if tx.is_valid() {

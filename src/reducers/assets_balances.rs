@@ -284,19 +284,26 @@ impl Reducer {
 
     pub async fn reduce<'b>(
         &mut self,
-        block: &'b MultiEraBlock<'b>,
-        ctx: &model::BlockContext,
+        block: MultiEraBlock<'b>,
+        ctx: model::BlockContext,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: &crosscut::policies::RuntimePolicy,
+        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
         let slot = block.slot();
 
         for tx in block.txs() {
             for consumes in tx.consumes().iter() {
-                self.process_spent(output.clone(), consumes, ctx, slot, rollback, error_policy)
-                    .await
-                    .or_panic()?;
+                self.process_spent(
+                    output.clone(),
+                    consumes,
+                    &ctx,
+                    slot,
+                    rollback,
+                    &error_policy,
+                )
+                .await
+                .or_panic()?;
             }
 
             for (_, utxo_produced) in tx.produces().iter() {

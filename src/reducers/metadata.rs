@@ -226,10 +226,10 @@ impl Reducer {
 
     pub async fn reduce<'b>(
         &mut self,
-        block: &MultiEraBlock<'b>,
+        block: MultiEraBlock<'b>,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: &crosscut::policies::RuntimePolicy,
+        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
         let prefix = self.config.key_prefix.as_deref().unwrap_or("m");
         let royalty_prefix = self.config.royalty_key_prefix.as_deref().unwrap_or("m.r");

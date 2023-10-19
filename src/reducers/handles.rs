@@ -50,18 +50,18 @@ impl Reducer {
 
     pub async fn reduce<'b>(
         &mut self,
-        block: &'b MultiEraBlock<'b>,
-        ctx: &model::BlockContext,
+        block: MultiEraBlock<'b>,
+        ctx: model::BlockContext,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: &crosscut::policies::RuntimePolicy,
+        error_policy: crosscut::policies::RuntimePolicy,
     ) -> Result<(), gasket::framework::WorkerError> {
         for tx in block.txs().iter() {
             if rollback {
                 for input in tx.consumes() {
                     if let Some(txo) = ctx
                         .find_utxo(&input.output_ref())
-                        .apply_policy(error_policy)
+                        .apply_policy(&error_policy)
                         .or_panic()
                         .unwrap()
                     {
