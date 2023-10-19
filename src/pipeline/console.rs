@@ -182,8 +182,6 @@ impl PlainConsole {
     }
 
     async fn refresh(&self, pipeline: &super::Pipeline) -> Result<(), WorkerError> {
-        let unused = self.last_report.lock().await;
-
         for tether in pipeline.tethers.iter() {
             match tether.check_state() {
                 gasket::runtime::TetherState::Dropped => {

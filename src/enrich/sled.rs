@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 
 use crate::crosscut;
 use crate::pipeline::Context;
+use crate::prelude::AppliesPolicy;
 use crate::{
     model::{self, BlockContext, EnrichedBlockPayload, RawBlockPayload},
     pipeline,
@@ -337,9 +338,10 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                         match self
                             .par_fetch_referenced_utxos(db, block.number(), &txs)
-                            .or_panic()
+                            .apply_policy(&stage.ctx.lock().await.error_policy.clone())
+                            .or_panic()?
                         {
-                            Ok((ctx, match_count, mismatch_count)) => {
+                            Some((ctx, match_count, mismatch_count)) => {
                                 stage.enrich_matches.inc(match_count);
                                 stage.enrich_mismatches.inc(mismatch_count);
 
@@ -360,7 +362,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                                     .await
                                     .or_panic()
                             }
-                            Err(e) => Err(e),
+                            None => Err(gasket::framework::WorkerError::Panic),
                         }
                     }
 
