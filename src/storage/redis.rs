@@ -1,9 +1,11 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crossbeam::atomic::AtomicCell;
 use gasket::framework::*;
 use gasket::messaging::tokio::InputPort;
 
+use pallas::ledger::traverse::MultiEraBlock;
 use redis::{Cmd, Commands, ConnectionLike, ToRedisArgs};
 use serde::Deserialize;
 use tokio::sync::Mutex;
@@ -41,6 +43,7 @@ impl Config {
             },
             input: Default::default(),
             storage_ops: Default::default(),
+            chain_era: Default::default(),
             ctx,
         }
     }
@@ -85,10 +88,32 @@ pub struct Stage {
 
     #[metric]
     storage_ops: gasket::metrics::Counter,
+
+    #[metric]
+    chain_era: gasket::metrics::Gauge,
 }
 
 pub struct Worker {
     connection: Option<redis::Connection>,
+}
+
+// Hack to encode era
+pub fn string_to_i64(s: String) -> i64 {
+    let bytes = s.into_bytes();
+    let mut result: i64 = 0;
+
+    for &b in bytes.iter() {
+        assert!(b < 128); // Ensures ascii
+        result <<= 8;
+        result |= i64::from(b);
+    }
+
+    // If the string is less than 8 characters, left pad with zeros.
+    for _ in 0..8usize.saturating_sub(bytes.len()) {
+        result <<= 8;
+    }
+
+    result
 }
 
 #[async_trait::async_trait(?Send)]
@@ -285,6 +310,11 @@ impl gasket::framework::Worker<Stage> for Worker {
             }
             model::CRDTCommand::BlockFinished(point, block_bytes, rollback) => {
                 let cursor_str = crosscut::PointArg::from(point.clone()).to_string();
+
+                let block = MultiEraBlock::decode(&block_bytes);
+                stage
+                    .chain_era
+                    .set(string_to_i64(block.unwrap().era().to_string()));
 
                 if !rollback {
                     self.connection

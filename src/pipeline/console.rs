@@ -34,6 +34,23 @@ struct TuiConsole {
     historic_blocks_removed: indicatif::ProgressBar,
 }
 
+pub fn i64_to_string(mut i: i64) -> String {
+    let mut bytes = Vec::new();
+
+    while i != 0 {
+        let byte = (i & 0xFF) as u8;
+        // Skip if it's a padding byte
+        if byte != 0 {
+            bytes.push(byte);
+        }
+        i >>= 8;
+    }
+
+    let s = std::string::String::from_utf8(bytes).unwrap();
+
+    s.chars().rev().collect::<String>()
+}
+
 impl TuiConsole {
     fn build_counter_spinner(
         name: &str,
@@ -58,7 +75,7 @@ impl TuiConsole {
             chainsync_progress: container.add(
                 indicatif::ProgressBar::new(0).with_style(
                     indicatif::ProgressStyle::default_bar()
-                        .template("chainsync progress: {bar} {pos}/{len} eta: {eta}\n{msg}")
+                        .template("Cardano ({prefix}): {wide_bar} {pos}/{len} eta: {eta}\n{msg}")
                         .unwrap(),
                 ),
             ),
@@ -142,6 +159,9 @@ impl TuiConsole {
                             (_, "historic_blocks_removed", Reading::Count(x)) => {
                                 self.historic_blocks_removed.set_position(x);
                                 self.historic_blocks_removed.set_message("");
+                            }
+                            (_, "chain_era", Reading::Gauge(x)) => {
+                                self.chainsync_progress.set_prefix(i64_to_string(x));
                             }
                             _ => (),
                         }

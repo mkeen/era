@@ -97,6 +97,19 @@ pub struct Pipeline {
     pub tethers: Vec<Tether>,
 }
 
+pub fn i64_to_string(mut i: i64) -> String {
+    let mut bytes = Vec::new();
+
+    while i != 0 {
+        bytes.push((i & 0xFF) as u8);
+        i >>= 8;
+    }
+
+    let s = std::string::String::from_utf8(bytes).unwrap();
+
+    s.chars().rev().collect::<String>()
+}
+
 impl Pipeline {
     pub fn bootstrap(
         ctx: Arc<Mutex<Context>>,
