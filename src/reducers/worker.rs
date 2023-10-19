@@ -64,29 +64,26 @@ impl Worker {
             );
         }
 
-        let mut handles = Vec::new();
+        //let mut handles = Vec::new();
         for reducer in reducers {
-            handles.push(reducer.reduce_block(
-                &block_parsed,
-                &ctx,
-                rollback,
-                output.clone(),
-                error_policy,
-            ));
+            reducer
+                .reduce_block(&block_parsed, &ctx, rollback, output.clone(), error_policy)
+                .await
+                .unwrap();
         }
 
-        let results = futures::future::join_all(handles).await;
+        // let results = futures::future::join_all(handles).await;
 
-        for res in results {
-            match res {
-                Ok(_) => {
-                    ops_count.inc(1);
-                }
-                Err(e) => {
-                    panic!("Reducer error {:?}", e)
-                }
-            };
-        }
+        // for res in results {
+        //     match res {
+        //         Ok(_) => {
+        //             ops_count.inc(1);
+        //         }
+        //         Err(e) => {
+        //             panic!("Reducer error {:?}", e)
+        //         }
+        //     };
+        // }
 
         output
             .lock()
