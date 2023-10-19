@@ -69,7 +69,7 @@ impl Reducer {
     pub async fn reduce_block<'b>(
         &mut self,
         block: MultiEraBlock<'b>,
-        ctx: model::BlockContext,
+        ctx: &model::BlockContext,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         errs: crosscut::policies::RuntimePolicy,

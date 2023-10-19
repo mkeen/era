@@ -88,14 +88,16 @@ impl Reducer {
                     tx_str.to_string(),
                 ),
 
-                _ => CRDTCommand::set_remove(
+                false => CRDTCommand::set_remove(
                     self.config.key_prefix.clone().as_deref(),
                     &soa,
                     tx_str.to_string(),
                 ),
             }))
             .await
-            .or_retry()
+            .unwrap();
+
+        Ok(())
     }
 
     async fn coin_state(
@@ -116,14 +118,16 @@ impl Reducer {
                     format!("{}/{}", address, lovelace_amt),
                 ),
 
-                _ => CRDTCommand::set_remove(
+                false => CRDTCommand::set_remove(
                     self.config.coin_key_prefix.clone().as_deref(),
                     tx_str,
                     format!("{}/{}", address, lovelace_amt),
                 ),
             }))
             .await
-            .or_panic()
+            .unwrap();
+
+        Ok(())
     }
 
     async fn token_state(
@@ -354,7 +358,7 @@ impl Reducer {
     pub async fn reduce<'b>(
         &mut self,
         block: MultiEraBlock<'b>,
-        ctx: model::BlockContext,
+        ctx: &model::BlockContext,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: crosscut::policies::RuntimePolicy,
