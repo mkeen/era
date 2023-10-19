@@ -109,36 +109,8 @@ impl Reducer {
             Metadatum::Bytes(l) => Ok(String::from_utf8(l.to_vec())
                 .unwrap_or_default()
                 .to_string()),
-            _ => Err("Malformed metadata"),
+            _ => Err("Malformed metadata label"),
         }
-    }
-
-    fn get_wrapped_metadata_fragment(
-        &self,
-        cip: u64,
-        asset_name: String,
-        policy_id: String,
-        asset_metadata: &KeyValuePairs<Metadatum, Metadatum>,
-    ) -> Metadata {
-        let asset_map = KeyValuePairs::from(vec![
-            (
-                Metadatum::Text(asset_name),
-                Metadatum::Map(asset_metadata.clone())
-            );
-            1
-        ]);
-
-        let policy_map = KeyValuePairs::from(vec![(
-            Metadatum::Text(policy_id.clone()),
-            Metadatum::Map(asset_map),
-        )]);
-
-        let meta_wrapper = vec![(
-            MetadatumLabel::from(cip),
-            Metadatum::Map(policy_map.clone()),
-        )];
-
-        Metadata::from(meta_wrapper)
     }
 
     fn get_metadata_fragment(
@@ -241,7 +213,7 @@ impl Reducer {
                                     ),
                                 },
 
-                                _ => CRDTCommand::noop(),
+                                _ => CRDTCommand::noop(), // this never gets called.. need to find a clean way not to need this
                             }))
                             .await?;
                     }

@@ -109,7 +109,7 @@ impl Reducer {
                                     .into(),
                                 )
                                 .await
-                                .or_panic()?;
+                                .unwrap();
 
                             output
                                 .lock()
@@ -129,7 +129,7 @@ impl Reducer {
                                     .into(),
                                 )
                                 .await
-                                .or_panic()?;
+                                .unwrap();
                         }
                     }
                 }
@@ -172,9 +172,9 @@ impl Reducer {
                     };
 
                     for asset_name in asset_names {
-                        output
-                            .lock()
-                            .await
+                        let locked = &mut output.lock().await;
+
+                        locked
                             .send(
                                 model::CRDTCommand::any_write_wins(
                                     Some(
@@ -188,9 +188,7 @@ impl Reducer {
                             .await
                             .unwrap();
 
-                        output
-                            .lock()
-                            .await
+                        locked
                             .send(
                                 model::CRDTCommand::any_write_wins(
                                     Some(

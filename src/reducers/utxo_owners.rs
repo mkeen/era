@@ -137,7 +137,7 @@ impl Reducer {
                                     .into(),
                             )
                             .await
-                            .or_panic()?;
+                            .unwrap();
                     }
                 }
             }
@@ -151,7 +151,7 @@ impl Reducer {
                         .await
                         .send(model::CRDTCommand::set_add(Some(prefix), &key, value).into())
                         .await
-                        .or_panic()?;
+                        .unwrap();
                 }
             }
         }
