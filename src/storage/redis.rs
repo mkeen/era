@@ -342,6 +342,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                         .await
                         .block_buffer
                         .insert_block(&point, &block_bytes);
+                } else {
+                    stage.ctx.lock().await.block_buffer.remove_block(&point); // todo make these return a Result so we can use error handling
                 }
             }
         };

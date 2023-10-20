@@ -63,12 +63,11 @@ impl BufferBlocks {
         }
     }
 
-    pub async fn block_mem_add(&mut self, block_msg_payload: RawBlockPayload) -> () {
+    pub fn block_mem_add(&mut self, block_msg_payload: RawBlockPayload) {
         self.buffer.push(block_msg_payload.to_owned());
-        ()
     }
 
-    pub async fn block_mem_take_all(&mut self) -> Option<Vec<RawBlockPayload>> {
+    pub fn block_mem_take_all(&mut self) -> Option<Vec<RawBlockPayload>> {
         let empty: Vec<RawBlockPayload> = vec![];
         let blocks = mem::replace(&mut self.buffer, empty);
         match blocks.is_empty() {
@@ -77,7 +76,7 @@ impl BufferBlocks {
         }
     }
 
-    pub async fn block_mem_size(&self) -> usize {
+    pub fn block_mem_size(&self) -> usize {
         self.buffer.len()
     }
 
@@ -122,10 +121,15 @@ impl BufferBlocks {
 
     pub fn insert_block(&mut self, point: &Point, block: &Vec<u8>) {
         let key = to_zero_padded_string(point);
-        log::debug!("my key was {}", key);
         let db = self.get_db_ref();
         db.insert(key.as_bytes(), sled::IVec::from(block.clone()))
             .expect("todo map storage error");
+    }
+
+    pub fn remove_block(&mut self, point: &Point) {
+        let key = to_zero_padded_string(point);
+        let db = self.get_db_ref();
+        db.remove(key.as_bytes()).expect("todo map storage error");
     }
 
     pub fn get_block_at_point(&self, point: &Point) -> Option<Vec<u8>> {

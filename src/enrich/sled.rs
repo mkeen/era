@@ -320,25 +320,39 @@ impl gasket::framework::Worker<Stage> for Worker {
         unit: &RawBlockPayload,
         stage: &mut Stage,
     ) -> Result<(), WorkerError> {
+        let policy = stage.ctx.lock().await.error_policy.clone();
+
         match self.db_refs_all() {
             Ok(db_refs) => match db_refs {
                 Some((db, consumed_ring)) => match unit {
                     model::RawBlockPayload::RollForward(cbor) => {
-                        let block = MultiEraBlock::decode(&cbor).unwrap();
+                        let block = MultiEraBlock::decode(&cbor)
+                            .map_err(crate::Error::cbor)
+                            .apply_policy(&policy)
+                            .or_panic()?;
 
-                        let txs = &block.txs();
+                        let block = block.unwrap();
 
-                        let result = self.insert_produced_utxos(db, txs).or_retry();
+                        let txs = block.txs();
 
-                        if let Ok(_) = result {
-                            stage.enrich_inserts.inc(txs.len() as u64);
-                        } else if let Err(error_result) = result {
-                            return Err(error_result);
+                        match self
+                            .insert_produced_utxos(db, &txs)
+                            .map_err(crate::Error::cbor)
+                            .apply_policy(&policy)
+                            .or_retry()?
+                        {
+                            Some(_) => {
+                                stage.enrich_inserts.inc(1);
+                            }
+
+                            None => {
+                                crate::Error::storage("save_produced fail");
+                            }
                         }
 
                         match self
                             .par_fetch_referenced_utxos(db, block.number(), &txs)
-                            .apply_policy(&stage.ctx.lock().await.error_policy.clone())
+                            .apply_policy(&policy)
                             .or_panic()?
                         {
                             Some((ctx, match_count, mismatch_count)) => {

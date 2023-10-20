@@ -51,10 +51,12 @@ pub struct Stage {
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Worker {
     async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
-        let peer_session =
-            PeerClient::connect(&stage.config.address, stage.ctx.lock().await.chain.magic)
-                .await
-                .unwrap();
+        let peer_session = PeerClient::connect(
+            &stage.config.address,
+            stage.ctx.lock().await.chain.magic.clone(),
+        )
+        .await
+        .unwrap();
 
         let mut worker = Self {
             min_depth: stage.config.min_depth.unwrap_or(10 as usize),
@@ -131,7 +133,7 @@ impl gasket::framework::Worker<Stage> for Worker {
         async fn flush_buffered_blocks(
             blocks_client: &mut crosscut::historic::BufferBlocks,
         ) -> Vec<RawBlockPayload> {
-            match blocks_client.block_mem_take_all().await {
+            match blocks_client.block_mem_take_all().to_owned() {
                 Some(blocks) => blocks,
                 None => vec![],
             }
@@ -154,15 +156,9 @@ impl gasket::framework::Worker<Stage> for Worker {
                                     .await
                                 {
                                     Ok(static_single) => {
-                                        stage
-                                            .ctx
-                                            .lock()
-                                            .await
-                                            .block_buffer
-                                            .block_mem_add(RawBlockPayload::RollForward(
-                                                static_single,
-                                            ))
-                                            .await;
+                                        stage.ctx.lock().await.block_buffer.block_mem_add(
+                                            RawBlockPayload::RollForward(static_single),
+                                        );
 
                                         match stage
                                             .ctx
@@ -170,7 +166,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                                             .await
                                             .block_buffer
                                             .block_mem_size()
-                                            .await
+                                            .to_owned()
                                             >= self.min_depth
                                         {
                                             true => {
