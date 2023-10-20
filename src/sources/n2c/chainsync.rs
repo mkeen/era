@@ -176,41 +176,33 @@ impl gasket::framework::Worker<Stage> for Worker {
                         loop {
                             let pop_rollback_block =
                                 stage.ctx.lock().await.block_buffer.rollback_pop();
+
                             stage.historic_blocks_removed.inc(1);
 
-                            if let Some(last_good_block) =
-                                stage.ctx.lock().await.block_buffer.get_block_latest()
+                            if let Some(last_good_block) = stage
+                                .ctx
+                                .lock()
+                                .await
+                                .block_buffer
+                                .get_block_at_point(&p)
+                                .clone()
                             {
                                 if let Ok(parsed_last_good_block) =
                                     MultiEraBlock::decode(&last_good_block)
                                 {
-                                    let last_good_point = Point::Specific(
-                                        parsed_last_good_block.slot(),
-                                        parsed_last_good_block.hash().to_vec(),
-                                    );
-
                                     stage.chain_tip.set(parsed_last_good_block.slot() as i64);
 
                                     if let Some(rollback_cbor) = pop_rollback_block {
                                         blocks.push(RawBlockPayload::RollBack(
                                             rollback_cbor.clone(),
-                                            (last_good_point, parsed_last_good_block.number()),
+                                            (p.clone(), parsed_last_good_block.number()),
                                         ));
                                     } else {
                                         break;
                                     }
                                 }
                             } else {
-                                if let Some(rollback_cbor) = pop_rollback_block {
-                                    stage.chain_tip.set(0 as i64);
-
-                                    blocks.push(RawBlockPayload::RollBack(
-                                        rollback_cbor.clone(),
-                                        (Point::Origin, 0),
-                                    ));
-                                } else {
-                                    break;
-                                }
+                                panic!("no blocks to roll back")
                             }
                         }
 

@@ -92,16 +92,15 @@ impl BufferBlocks {
 
         let key = to_zero_padded_string(from);
 
-        let current_block = match db.get(key.as_bytes()).unwrap() {
-            None => vec![],
-            Some(value) => value.to_vec(),
-        };
+        // let current_block = match db.get(key.as_bytes()).unwrap() {
+        //     None => vec![],
+        //     Some(value) => value.to_vec(),
+        // };
 
-        if !current_block.is_empty() {
-            blocks_to_roll_back.push((key.clone(), current_block.to_vec()));
-        }
-
-        //let mut clear_blocks = sled::Batch::default();
+        // Do NOT include the most recent block. Thats what `from is` <insert facepalm emoji here>
+        // if !current_block.is_empty() {
+        //     blocks_to_roll_back.push((key.clone(), current_block.to_vec()));
+        // }
 
         let mut last_seen_slot_key = key.clone();
 
