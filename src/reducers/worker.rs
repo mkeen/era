@@ -68,7 +68,7 @@ impl Worker {
         for reducer in reducers {
             handles.push(reducer.reduce_block(
                 block_parsed.clone(),
-                &ctx,
+                ctx.clone(),
                 rollback.clone(),
                 output.clone(),
             ));
