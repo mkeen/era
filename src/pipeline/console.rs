@@ -32,6 +32,7 @@ struct TuiConsole {
     enrich_blocks: indicatif::ProgressBar,
     historic_blocks: indicatif::ProgressBar,
     historic_blocks_removed: indicatif::ProgressBar,
+    reducer_errors: indicatif::ProgressBar,
 }
 
 pub fn i64_to_string(mut i: i64) -> String {
@@ -86,6 +87,7 @@ impl TuiConsole {
             enrich_mismatches: Self::build_counter_spinner("enrich mismatches", &container),
             enrich_blocks: Self::build_counter_spinner("enrich blocks", &container),
             reducer_ops_count: Self::build_counter_spinner("reducer ops", &container),
+            reducer_errors: Self::build_counter_spinner("reducer errors", &container),
             storage_ops_count: Self::build_counter_spinner("storage ops", &container),
             historic_blocks: Self::build_counter_spinner("history inserts", &container),
             historic_blocks_removed: Self::build_counter_spinner("history removes", &container),
@@ -127,6 +129,10 @@ impl TuiConsole {
                             (_, "ops_count", Reading::Count(x)) => {
                                 self.reducer_ops_count.set_position(x);
                                 self.reducer_ops_count.set_message(state);
+                            }
+                            (_, "reducer_errors", Reading::Count(x)) => {
+                                self.reducer_errors.set_position(x);
+                                self.reducer_errors.set_message(state);
                             }
                             (_, "storage_ops", Reading::Count(x)) => {
                                 self.storage_ops_count.set_position(x);

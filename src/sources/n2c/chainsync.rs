@@ -177,8 +177,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                             let pop_rollback_block =
                                 stage.ctx.lock().await.block_buffer.rollback_pop();
 
-                            stage.historic_blocks_removed.inc(1);
-
                             if let Some(last_good_block) =
                                 stage.ctx.lock().await.block_buffer.get_block_at_point(&p)
                             {
@@ -186,6 +184,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                                     MultiEraBlock::decode(&last_good_block)
                                 {
                                     if let Some(rollback_cbor) = pop_rollback_block {
+                                        stage.historic_blocks_removed.inc(1);
+
                                         blocks.push(RawBlockPayload::RollBack(
                                             rollback_cbor.clone(),
                                             (p.clone(), parsed_last_good_block.number()),

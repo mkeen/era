@@ -32,6 +32,7 @@ impl Worker {
         error_policy: &'b crosscut::policies::RuntimePolicy,
         reducers: &'b mut Vec<Reducer>,
         ops_count: &gasket::metrics::Counter,
+        reducer_errors: &gasket::metrics::Counter,
     ) -> Result<u64, gasket::framework::WorkerError> {
         let point = match rollback {
             true => {
@@ -81,8 +82,8 @@ impl Worker {
                 Ok(_) => {
                     ops_count.inc(1);
                 }
-                Err(e) => {
-                    panic!("Reducer error {:?}", e)
+                Err(_) => {
+                    reducer_errors.inc(1);
                 }
             };
         }
@@ -120,6 +121,7 @@ pub fn bootstrap(
         ops_count: Default::default(),
         last_block: Default::default(),
         historic_blocks: Default::default(),
+        reducer_errors: Default::default(),
     };
 
     stage
@@ -146,6 +148,9 @@ pub struct Stage {
 
     #[metric]
     historic_blocks: gasket::metrics::Counter,
+
+    #[metric]
+    reducer_errors: gasket::metrics::Counter,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -185,6 +190,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                         &error_policy,
                         &mut stage.reducers,
                         &stage.ops_count,
+                        &stage.reducer_errors,
                     )
                     .await
                     .unwrap() as i64,
@@ -202,6 +208,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                         &error_policy,
                         &mut stage.reducers,
                         &stage.ops_count,
+                        &stage.reducer_errors,
                     )
                     .await
                     .unwrap() as i64,
