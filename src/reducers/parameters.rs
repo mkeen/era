@@ -47,7 +47,7 @@ impl Reducer {
             "transactions_count".into(),
         ];
         let mut member_values = vec![
-            Value::BigInt(block_epoch(&self.ctx.lock().await.chain, &block).into()),
+            Value::BigInt(block_epoch(&self.ctx.lock().await.chain.clone(), &block).into()),
             Value::BigInt(block.number().into()),
             Value::BigInt(block.slot().into()),
             block.hash().to_string().into(),

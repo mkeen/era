@@ -42,10 +42,12 @@ pub struct Stage {
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Worker {
     async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
-        let peer_session =
-            NodeClient::connect(&stage.config.path, stage.ctx.lock().await.chain.magic)
-                .await
-                .unwrap();
+        let peer_session = NodeClient::connect(
+            &stage.config.path,
+            stage.ctx.lock().await.chain.magic.clone(),
+        )
+        .await
+        .unwrap();
 
         let mut worker = Self {
             min_depth: stage.config.min_depth.unwrap_or(10 as usize),
@@ -65,7 +67,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .map_err(crate::Error::ouroboros)
                     .unwrap();
             }
-            None => match &stage.ctx.lock().await.intersect {
+            None => match &stage.ctx.lock().await.intersect.clone() {
                 crosscut::IntersectConfig::Origin => {
                     peer.chainsync
                         .intersect_origin()
@@ -135,74 +137,88 @@ impl gasket::framework::Worker<Stage> for Worker {
 
         Ok(WorkSchedule::Unit(match peer.chainsync.has_agency() {
             true => match peer.chainsync.request_next().await.or_restart() {
-                Ok(next) => {
-                    let mut blocks_client = &mut stage.ctx.lock().await.block_buffer;
+                Ok(next) => match next {
+                    NextResponse::RollForward(cbor, t) => {
+                        stage.chain_tip.set(t.1 as i64);
+                        stage
+                            .ctx
+                            .lock()
+                            .await
+                            .block_buffer
+                            .block_mem_add(RawBlockPayload::RollForward(cbor.0))
+                            .await;
 
-                    match next {
-                        NextResponse::RollForward(cbor, t) => {
-                            stage.chain_tip.set(t.1 as i64);
-                            blocks_client
-                                .block_mem_add(RawBlockPayload::RollForward(cbor.0))
-                                .await;
+                        match stage.ctx.lock().await.block_buffer.block_mem_size().await
+                            >= self.min_depth
+                        {
+                            true => {
+                                flush_buffered_blocks(&mut stage.ctx.lock().await.block_buffer)
+                                    .await
+                            }
 
-                            match blocks_client.block_mem_size().await >= self.min_depth {
-                                true => flush_buffered_blocks(&mut blocks_client).await,
-
-                                false => {
-                                    vec![]
-                                }
+                            false => {
+                                vec![]
                             }
                         }
+                    }
 
-                        NextResponse::RollBackward(p, t) => {
-                            let mut blocks = flush_buffered_blocks(&mut blocks_client).await;
+                    NextResponse::RollBackward(p, t) => {
+                        let mut blocks =
+                            flush_buffered_blocks(&mut stage.ctx.lock().await.block_buffer).await;
 
-                            blocks_client.enqueue_rollback_batch(&p);
+                        stage
+                            .ctx
+                            .lock()
+                            .await
+                            .block_buffer
+                            .enqueue_rollback_batch(&p);
 
-                            loop {
-                                let pop_rollback_block = blocks_client.rollback_pop();
-                                stage.historic_blocks_removed.inc(1);
+                        loop {
+                            let pop_rollback_block =
+                                stage.ctx.lock().await.block_buffer.rollback_pop();
+                            stage.historic_blocks_removed.inc(1);
 
-                                if let Some(last_good_block) = blocks_client.get_block_latest() {
-                                    if let Ok(parsed_last_good_block) =
-                                        MultiEraBlock::decode(&last_good_block)
-                                    {
-                                        let last_good_point = Point::Specific(
-                                            parsed_last_good_block.slot(),
-                                            parsed_last_good_block.hash().to_vec(),
-                                        );
+                            if let Some(last_good_block) =
+                                stage.ctx.lock().await.block_buffer.get_block_latest()
+                            {
+                                if let Ok(parsed_last_good_block) =
+                                    MultiEraBlock::decode(&last_good_block)
+                                {
+                                    let last_good_point = Point::Specific(
+                                        parsed_last_good_block.slot(),
+                                        parsed_last_good_block.hash().to_vec(),
+                                    );
 
-                                        stage.chain_tip.set(parsed_last_good_block.slot() as i64);
+                                    stage.chain_tip.set(parsed_last_good_block.slot() as i64);
 
-                                        if let Some(rollback_cbor) = pop_rollback_block {
-                                            blocks.push(RawBlockPayload::RollBack(
-                                                rollback_cbor.clone(),
-                                                (last_good_point, parsed_last_good_block.number()),
-                                            ));
-                                        } else {
-                                            break;
-                                        }
-                                    }
-                                } else {
                                     if let Some(rollback_cbor) = pop_rollback_block {
-                                        stage.chain_tip.set(0 as i64);
-
                                         blocks.push(RawBlockPayload::RollBack(
                                             rollback_cbor.clone(),
-                                            (Point::Origin, 0),
+                                            (last_good_point, parsed_last_good_block.number()),
                                         ));
                                     } else {
                                         break;
                                     }
                                 }
-                            }
+                            } else {
+                                if let Some(rollback_cbor) = pop_rollback_block {
+                                    stage.chain_tip.set(0 as i64);
 
-                            blocks
+                                    blocks.push(RawBlockPayload::RollBack(
+                                        rollback_cbor.clone(),
+                                        (Point::Origin, 0),
+                                    ));
+                                } else {
+                                    break;
+                                }
+                            }
                         }
 
-                        NextResponse::Await => vec![],
+                        blocks
                     }
-                }
+
+                    NextResponse::Await => vec![],
+                },
                 Err(_) => {
                     log::warn!("got no response");
                     vec![]
@@ -212,8 +228,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                 log::info!("awaiting next block (blocking)");
                 match peer.chainsync.recv_while_must_reply().await.or_restart() {
                     Ok(n) => {
-                        let mut blocks_client = &mut stage.ctx.lock().await.block_buffer;
-                        let mut blocks = flush_buffered_blocks(&mut blocks_client).await;
+                        let mut blocks =
+                            flush_buffered_blocks(&mut stage.ctx.lock().await.block_buffer).await;
 
                         match n {
                             NextResponse::RollForward(cbor, t) => {
@@ -226,13 +242,21 @@ impl gasket::framework::Worker<Stage> for Worker {
                                 blocks
                             }
                             NextResponse::RollBackward(p, t) => {
-                                blocks_client.enqueue_rollback_batch(&p);
+                                stage
+                                    .ctx
+                                    .lock()
+                                    .await
+                                    .block_buffer
+                                    .enqueue_rollback_batch(&p);
 
                                 loop {
-                                    let pop_rollback_block = blocks_client.rollback_pop();
+                                    let pop_rollback_block =
+                                        stage.ctx.lock().await.block_buffer.rollback_pop();
+
                                     stage.historic_blocks_removed.inc(1);
 
-                                    if let Some(last_good_block) = blocks_client.get_block_latest()
+                                    if let Some(last_good_block) =
+                                        stage.ctx.lock().await.block_buffer.get_block_latest()
                                     {
                                         if let Ok(parsed_last_good_block) =
                                             MultiEraBlock::decode(&last_good_block)
