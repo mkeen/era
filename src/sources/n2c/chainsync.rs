@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 
 use crate::model::RawBlockPayload;
 use crate::pipeline::Context;
-use crate::{crosscut, model, sources, storage, Error};
+use crate::{crosscut, sources, storage};
 
 use crate::prelude::*;
 
@@ -86,8 +86,10 @@ impl gasket::framework::Worker<Stage> for Worker {
                         .lock()
                         .await
                         .intersect
+                        .clone()
                         .get_point()
                         .expect("point value");
+
                     peer.chainsync
                         .find_intersect(vec![point.clone()])
                         .await
@@ -100,8 +102,10 @@ impl gasket::framework::Worker<Stage> for Worker {
                         .lock()
                         .await
                         .intersect
+                        .clone()
                         .get_fallbacks()
                         .expect("fallback values");
+
                     peer.chainsync
                         .find_intersect(points.clone())
                         .await
