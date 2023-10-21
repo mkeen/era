@@ -44,7 +44,7 @@ impl Reducer {
         fingerprint: &str,
         timestamp: &str,
         output: Arc<Mutex<OutputPort<model::CRDTCommand>>>,
-    ) -> Result<(), gasket::error::Error> {
+    ) -> Result<(), gasket::framework::WorkerError> {
         let key = match &self.config.key_prefix {
             Some(prefix) => prefix.to_string(),
             None => "policy".to_string(),
@@ -56,7 +56,7 @@ impl Reducer {
             timestamp.to_string().into(),
         );
 
-        output.lock().await.send(crdt.into()).await.unwrap();
+        output.lock().await.send(crdt.into()).await.or_panic()?;
 
         Ok(())
     }

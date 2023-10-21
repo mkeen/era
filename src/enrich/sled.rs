@@ -337,7 +337,7 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                         match self
                             .insert_produced_utxos(db, &txs)
-                            .map_err(crate::Error::cbor)
+                            .map_err(crate::Error::storage)
                             .apply_policy(&policy)
                             .or_retry()?
                         {
@@ -382,15 +382,12 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                     model::RawBlockPayload::RollBack(
                         cbor,
-                        (last_known_point, last_known_number),
+                        (last_known_point, last_known_block_number),
                     ) => {
                         let block = MultiEraBlock::decode(&cbor);
 
                         if let Ok(block) = block {
                             let txs = block.txs();
-
-                            // Revert Anything to do with this block
-                            self.remove_produced_utxos(db, &txs).or_retry()?;
 
                             stage.enrich_removes.inc(txs.len() as u64);
 
@@ -398,18 +395,28 @@ impl gasket::framework::Worker<Stage> for Worker {
                                 .or_panic()?;
 
                             let (ctx, match_count, mismatch_count) = self
-                                .par_fetch_referenced_utxos(db, last_known_number.clone(), &txs)
-                                .or_restart()?;
+                                .par_fetch_referenced_utxos(
+                                    db,
+                                    last_known_block_number.clone(),
+                                    &txs,
+                                )
+                                .or_panic()?;
 
                             stage.enrich_matches.inc(match_count);
                             stage.enrich_mismatches.inc(mismatch_count);
+
+                            // Revert Anything to do with this block from consumed ring
+                            self.remove_produced_utxos(db, &txs)
+                                .map_err(crate::Error::storage)
+                                .apply_policy(&policy)
+                                .or_panic()?;
 
                             stage
                                 .output
                                 .send(model::EnrichedBlockPayload::roll_back(
                                     cbor.clone(),
                                     ctx,
-                                    (last_known_point.clone(), last_known_number.clone()),
+                                    (last_known_point.clone(), last_known_block_number.clone()),
                                 ))
                                 .await
                                 .or_panic()?;

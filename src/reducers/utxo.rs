@@ -97,9 +97,7 @@ impl Reducer {
                 ),
             }))
             .await
-            .unwrap();
-
-        Ok(())
+            .or_panic()
     }
 
     async fn coin_state(
@@ -127,9 +125,7 @@ impl Reducer {
                 ),
             }))
             .await
-            .unwrap();
-
-        Ok(())
+            .or_panic()
     }
 
     async fn token_state(
@@ -216,6 +212,8 @@ impl Reducer {
             Some(x) => x,
             None => return Ok(()),
         };
+
+        log::warn!("dwef {}", "hi");
 
         let address = utxo.address().map(|x| x.to_string()).unwrap();
 
@@ -305,7 +303,8 @@ impl Reducer {
                 tx_output.lovelace_amount().to_string().as_str(),
                 !rollback,
             )
-            .await?;
+            .await
+            .or_panic()?;
 
             self.datum_state(
                 output.clone(),
@@ -314,7 +313,8 @@ impl Reducer {
                 &tx_output,
                 !rollback,
             )
-            .await?;
+            .await
+            .or_panic()?;
 
             for asset_group in tx_output.non_ada_assets() {
                 for asset in asset_group.assets() {
@@ -337,7 +337,8 @@ impl Reducer {
                                     quantity.to_string().as_str(),
                                     !rollback,
                                 )
-                                .await?
+                                .await
+                                .or_panic()?
                             }
                         }
                     };
@@ -351,7 +352,8 @@ impl Reducer {
                 &format!("{}#{}", tx_hash, output_idx),
                 !rollback,
             )
-            .await?
+            .await
+            .or_panic()?
         }
 
         Ok(())

@@ -26,7 +26,7 @@ impl Worker {
         block_raw: &'b Vec<u8>,
         block_parsed: &'b MultiEraBlock<'b>,
         rollback: bool,
-        ctx: &'b model::BlockContext,
+        block_ctx: &'b model::BlockContext,
         last_good_block_rollback_info: Option<(Point, u64)>,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         error_policy: &'b crosscut::policies::RuntimePolicy,
@@ -69,7 +69,7 @@ impl Worker {
         for reducer in reducers {
             handles.push(reducer.reduce_block(
                 block_parsed.clone(),
-                ctx.clone(),
+                block_ctx.clone(),
                 rollback.clone(),
                 output.clone(),
             ));
@@ -77,12 +77,13 @@ impl Worker {
 
         let results = futures::future::join_all(handles).await;
 
-        for res in results {
+        for (i, res) in results.into_iter().enumerate() {
             match res {
                 Ok(_) => {
                     ops_count.inc(1);
                 }
                 Err(_) => {
+                    log::warn!("error in { }", i);
                     reducer_errors.inc(1);
                 }
             };

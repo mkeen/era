@@ -72,7 +72,9 @@ impl Reducer {
                 model::CRDTCommand::HashSetMulti(key, member_keys, member_values),
             ))
             .await
-            .or_retry()
+            .or_panic()?;
+
+        Ok(())
     }
 }
 
