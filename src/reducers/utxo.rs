@@ -187,7 +187,7 @@ impl Reducer {
                             ),
                         }))
                         .await
-                        .or_panic()?
+                        .or_panic()?;
                 }
 
                 _ => {}

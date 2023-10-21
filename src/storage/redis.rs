@@ -324,12 +324,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                         .or_restart()?;
                 }
 
-                log::info!(
-                    "new cursor saved to redis {} {}",
-                    &stage.config.cursor_key(),
-                    &cursor_str
-                );
-
                 // end redis transaction
                 redis::cmd("EXEC")
                     .query(self.connection.as_mut().unwrap())
@@ -344,6 +338,14 @@ impl gasket::framework::Worker<Stage> for Worker {
                         .insert_block(&point, &block_bytes);
                 } else {
                     stage.ctx.lock().await.block_buffer.remove_block(&point); // todo make these return a Result so we can use error handling
+                }
+
+                if !rollback {
+                    log::info!(
+                        "new cursor saved to redis {} {}",
+                        &stage.config.cursor_key(),
+                        &cursor_str
+                    );
                 }
             }
         };
