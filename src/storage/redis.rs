@@ -1,7 +1,6 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crossbeam::atomic::AtomicCell;
 use gasket::framework::*;
 use gasket::messaging::tokio::InputPort;
 
@@ -44,6 +43,7 @@ impl Config {
             input: Default::default(),
             storage_ops: Default::default(),
             chain_era: Default::default(),
+            chain_tip: Default::default(),
             ctx,
         }
     }
@@ -91,6 +91,9 @@ pub struct Stage {
 
     #[metric]
     chain_era: gasket::metrics::Gauge,
+
+    #[metric]
+    chain_tip: gasket::metrics::Gauge,
 }
 
 pub struct Worker {
@@ -316,37 +319,35 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .chain_era
                     .set(string_to_i64(block.unwrap().era().to_string()));
 
-                if !rollback {
-                    self.connection
-                        .as_mut()
-                        .unwrap()
-                        .set(stage.config.cursor_key(), &cursor_str)
-                        .or_restart()?;
-                }
+                self.connection
+                    .as_mut()
+                    .unwrap()
+                    .set(stage.config.cursor_key(), &cursor_str)
+                    .or_restart()?;
 
                 // end redis transaction
                 redis::cmd("EXEC")
                     .query(self.connection.as_mut().unwrap())
                     .or_restart()?;
 
-                if !rollback {
-                    stage
-                        .ctx
-                        .lock()
-                        .await
-                        .block_buffer
-                        .insert_block(&point, &block_bytes);
-                } else {
+                stage
+                    .ctx
+                    .lock()
+                    .await
+                    .block_buffer
+                    .insert_block(&point, &block_bytes);
+
+                stage.chain_tip.set(point.slot_or_default() as i64);
+
+                if *rollback {
                     stage.ctx.lock().await.block_buffer.remove_block(&point); // todo make these return a Result so we can use error handling
                 }
 
-                if !rollback {
-                    log::info!(
-                        "new cursor saved to redis {} {}",
-                        &stage.config.cursor_key(),
-                        &cursor_str
-                    );
-                }
+                log::info!(
+                    "new cursor saved to redis {} {}",
+                    &stage.config.cursor_key(),
+                    &cursor_str
+                );
             }
         };
 

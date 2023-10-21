@@ -223,8 +223,7 @@ impl Reducer {
                 &format!("{}#{}", input.hash(), input.index()),
                 rollback,
             )
-            .await
-            .or_panic()?;
+            .await?;
 
             self.datum_state(
                 output.clone(),
@@ -233,8 +232,7 @@ impl Reducer {
                 &utxo,
                 rollback,
             )
-            .await
-            .or_panic()?;
+            .await?;
 
             self.coin_state(
                 output.clone(),
@@ -246,8 +244,7 @@ impl Reducer {
                 utxo.lovelace_amount().to_string().as_str(),
                 rollback,
             )
-            .await
-            .or_panic()?;
+            .await?;
         }
 
         // Spend Native Tokens
@@ -301,8 +298,7 @@ impl Reducer {
                 tx_output.lovelace_amount().to_string().as_str(),
                 !rollback,
             )
-            .await
-            .or_panic()?;
+            .await?;
 
             self.datum_state(
                 output.clone(),
@@ -311,8 +307,7 @@ impl Reducer {
                 &tx_output,
                 !rollback,
             )
-            .await
-            .or_panic()?;
+            .await?;
 
             for asset_group in tx_output.non_ada_assets() {
                 for asset in asset_group.assets() {
@@ -335,8 +330,7 @@ impl Reducer {
                                     quantity.to_string().as_str(),
                                     !rollback,
                                 )
-                                .await
-                                .or_panic()?
+                                .await?
                             }
                         }
                     };
@@ -350,8 +344,7 @@ impl Reducer {
                 &format!("{}#{}", tx_hash, output_idx),
                 !rollback,
             )
-            .await
-            .or_panic()?
+            .await?
         }
 
         Ok(())

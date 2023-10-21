@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use gasket::messaging::tokio::OutputPort;
 use pallas::ledger::traverse::MultiEraBlock;
@@ -31,9 +30,6 @@ pub struct Stage {
     pub ctx: Arc<Mutex<Context>>,
 
     pub output: OutputPort<RawBlockPayload>,
-
-    #[metric]
-    pub chain_tip: gasket::metrics::Gauge,
 
     #[metric]
     pub historic_blocks_removed: gasket::metrics::Counter,
@@ -130,7 +126,6 @@ impl gasket::framework::Worker<Stage> for Worker {
             true => match peer.chainsync.request_next().await.or_restart() {
                 Ok(next) => match next {
                     NextResponse::RollForward(cbor, t) => {
-                        stage.chain_tip.set(t.1 as i64);
                         stage
                             .ctx
                             .lock()
@@ -157,7 +152,6 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                     NextResponse::RollBackward(p, t) => {
                         log::warn!("rolling backward");
-                        stage.chain_tip.set(t.1 as i64);
                         let mut blocks =
                             match stage.ctx.lock().await.block_buffer.block_mem_take_all() {
                                 Some(blocks) => blocks,
@@ -224,8 +218,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                             NextResponse::RollForward(cbor, t) => {
                                 log::warn!("rolling forward");
 
-                                stage.chain_tip.set(t.1 as i64);
-
                                 blocks.push(RawBlockPayload::RollForward(cbor.0));
 
                                 blocks
@@ -254,10 +246,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                                                 parsed_last_good_block.slot(),
                                                 parsed_last_good_block.hash().to_vec(),
                                             );
-
-                                            stage
-                                                .chain_tip
-                                                .set(parsed_last_good_block.slot() as i64);
 
                                             if let Some(rollback_cbor) = pop_rollback_block {
                                                 blocks.push(RawBlockPayload::RollBack(
