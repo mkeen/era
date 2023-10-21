@@ -213,8 +213,6 @@ impl Reducer {
             None => return Ok(()),
         };
 
-        log::warn!("dwef {}", "hi");
-
         let address = utxo.address().map(|x| x.to_string()).unwrap();
 
         if let Ok(raw_address) = &utxo.address() {
