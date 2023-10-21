@@ -236,6 +236,7 @@ impl PlainConsole {
             }
         }
 
+        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
         Ok(())
     }
 }

@@ -1,3 +1,4 @@
+use std::fs::OpenOptions;
 use std::sync::Arc;
 
 use gasket::framework::*;
@@ -21,6 +22,8 @@ use crate::{
     model::{self, BlockContext, EnrichedBlockPayload, RawBlockPayload},
     pipeline,
 };
+
+use std::io::prelude::*;
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
@@ -117,24 +120,40 @@ impl Worker {
         }
     }
 
-    fn insert_produced_utxos(&self, db: &sled::Db, txs: &[MultiEraTx]) -> Result<(), crate::Error> {
+    fn insert_produced_utxos(
+        &self,
+        db: &sled::Db,
+        txs: &[MultiEraTx],
+        inserts: &gasket::metrics::Counter,
+    ) -> Result<(), crate::Error> {
         let mut insert_batch = sled::Batch::default();
 
         for tx in txs.iter() {
             for (idx, output) in tx.produces() {
                 let value: IVec = SledTxValue(tx.era() as u16, output.encode()).try_into()?;
-                insert_batch.insert(format!("{}#{}", tx.hash(), idx).as_bytes(), value)
+                let r = insert_batch.insert(format!("{}#{}", tx.hash(), idx).as_bytes(), value);
+
+                inserts.inc(1);
+
+                r
             }
         }
 
         db.apply_batch(insert_batch).map_err(crate::Error::storage)
     }
 
-    fn remove_produced_utxos(&self, db: &sled::Db, txs: &[MultiEraTx]) -> Result<(), crate::Error> {
+    fn remove_produced_utxos(
+        &self,
+        db: &sled::Db,
+        txs: &[MultiEraTx],
+        enrich_removes: &gasket::metrics::Counter,
+    ) -> Result<(), crate::Error> {
         let mut remove_batch = sled::Batch::default();
 
         for tx in txs.iter() {
             for (idx, _) in tx.produces() {
+                enrich_removes.inc(txs.len() as u64);
+
                 remove_batch.remove(format!("{}#{}", tx.hash(), idx).as_bytes());
             }
         }
@@ -335,25 +354,10 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                         let txs = block.txs();
 
-                        match self
-                            .insert_produced_utxos(db, &txs)
-                            .map_err(crate::Error::storage)
-                            .apply_policy(&policy)
-                            .or_retry()?
-                        {
-                            Some(_) => {
-                                stage.enrich_inserts.inc(1);
-                            }
-
-                            None => {
-                                crate::Error::storage("save_produced fail");
-                            }
-                        }
-
-                        match self
+                        let out = match self
                             .par_fetch_referenced_utxos(db, block.number(), &txs)
                             .apply_policy(&policy)
-                            .or_panic()?
+                            .or_restart()?
                         {
                             Some((ctx, match_count, mismatch_count)) => {
                                 stage.enrich_matches.inc(match_count);
@@ -377,7 +381,22 @@ impl gasket::framework::Worker<Stage> for Worker {
                                     .or_panic()
                             }
                             None => Err(gasket::framework::WorkerError::Panic),
-                        }
+                        };
+
+                        match self
+                            .insert_produced_utxos(db, &txs, &stage.enrich_inserts)
+                            .map_err(crate::Error::storage)
+                            .apply_policy(&policy)
+                            .or_panic()?
+                        {
+                            Some(_) => {}
+
+                            None => {
+                                crate::Error::storage("save_produced fail");
+                            }
+                        };
+
+                        out
                     }
 
                     model::RawBlockPayload::RollBack(
@@ -388,8 +407,6 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                         if let Ok(block) = block {
                             let txs = block.txs();
-
-                            stage.enrich_removes.inc(txs.len() as u64);
 
                             self.replace_consumed_utxos(db, consumed_ring, &txs)
                                 .or_panic()?;
@@ -406,7 +423,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                             stage.enrich_mismatches.inc(mismatch_count);
 
                             // Revert Anything to do with this block from consumed ring
-                            self.remove_produced_utxos(db, &txs)
+                            self.remove_produced_utxos(db, &txs, &stage.enrich_removes)
                                 .map_err(crate::Error::storage)
                                 .apply_policy(&policy)
                                 .or_panic()?;
