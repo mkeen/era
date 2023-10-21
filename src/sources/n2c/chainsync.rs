@@ -189,7 +189,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                                     }
                                 }
                             } else {
-                                log::info!("skipping rollback of unknown block");
                                 break;
                             }
                         }
