@@ -21,10 +21,9 @@ struct Config {
 pub struct Worker {}
 
 impl Worker {
-    async fn reduce_block<'b>(
+    async fn reduce_block(
         &mut self,
-        block_raw: &'b Vec<u8>,
-        block_parsed: MultiEraBlock<'b>,
+        block_raw: &Vec<u8>,
         rollback: bool,
         block_ctx: &model::BlockContext,
         last_good_block_rollback_info: Option<(Point, u64)>,
@@ -33,6 +32,8 @@ impl Worker {
         ops_count: &gasket::metrics::Counter,
         reducer_errors: &gasket::metrics::Counter,
     ) -> Result<(), WorkerError> {
+        let block_parsed = MultiEraBlock::decode(&block_raw).unwrap();
+
         let point = match rollback {
             true => {
                 let (last_point, _) = last_good_block_rollback_info.clone().unwrap();
@@ -90,7 +91,7 @@ impl Worker {
                     .into(),
             )
             .await
-            .map_err(|_| WorkerError::Send);
+            .map_err(|_| WorkerError::Send)?;
 
         match errors {
             true => Err(WorkerError::Panic),
@@ -164,27 +165,20 @@ impl gasket::framework::Worker<Stage> for Worker {
         stage: &mut Stage,
     ) -> Result<(), WorkerError> {
         match unit {
-            model::EnrichedBlockPayload::RollForward(block, ctx) => {
-                let parsed_block = MultiEraBlock::decode(block).unwrap();
+            model::EnrichedBlockPayload::RollForward(block, ctx) => self.reduce_block(
+                block,
+                false,
+                &ctx,
+                None,
+                stage.output.clone(),
+                &mut stage.reducers,
+                &stage.ops_count,
+                &stage.reducer_errors,
+            ),
 
-                self.reduce_block(
-                    &block,
-                    parsed_block,
-                    false,
-                    &ctx,
-                    None,
-                    stage.output.clone(),
-                    &mut stage.reducers,
-                    &stage.ops_count,
-                    &stage.reducer_errors,
-                )
-            }
-
-            model::EnrichedBlockPayload::RollBack(block, ctx, last_block_rollback_info) => {
-                let parsed_block = MultiEraBlock::decode(block).unwrap();
-                self.reduce_block(
-                    &block,
-                    parsed_block,
+            model::EnrichedBlockPayload::RollBack(block, ctx, last_block_rollback_info) => self
+                .reduce_block(
+                    block,
                     true,
                     &ctx,
                     Some(last_block_rollback_info.clone()),
@@ -192,8 +186,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     &mut stage.reducers,
                     &stage.ops_count,
                     &stage.reducer_errors,
-                )
-            }
+                ),
         }
         .await
     }
