@@ -32,7 +32,7 @@ pub struct Stage {
     pub output: OutputPort<RawBlockPayload>,
 
     #[metric]
-    pub historic_blocks_removed: gasket::metrics::Counter,
+    pub chain_tip: gasket::metrics::Gauge,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -126,6 +126,8 @@ impl gasket::framework::Worker<Stage> for Worker {
             true => match peer.chainsync.request_next().await.or_restart() {
                 Ok(next) => match next {
                     NextResponse::RollForward(cbor, t) => {
+                        stage.chain_tip.set(t.1 as i64);
+
                         stage
                             .ctx
                             .lock()
@@ -151,7 +153,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                     }
 
                     NextResponse::RollBackward(p, t) => {
-                        log::warn!("rolling backward");
+                        stage.chain_tip.set(t.1 as i64);
+
                         let mut blocks =
                             match stage.ctx.lock().await.block_buffer.block_mem_take_all() {
                                 Some(blocks) => blocks,
@@ -178,8 +181,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                                     MultiEraBlock::decode(&last_good_block)
                                 {
                                     if let Some(rollback_cbor) = pop_rollback_block {
-                                        stage.historic_blocks_removed.inc(1);
-
                                         blocks.push(RawBlockPayload::RollBack(
                                             rollback_cbor.clone(),
                                             (p.clone(), parsed_last_good_block.number()),
@@ -232,8 +233,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                                 loop {
                                     let pop_rollback_block =
                                         stage.ctx.lock().await.block_buffer.rollback_pop();
-
-                                    stage.historic_blocks_removed.inc(1);
 
                                     if let Some(last_good_block) =
                                         stage.ctx.lock().await.block_buffer.get_block_latest()

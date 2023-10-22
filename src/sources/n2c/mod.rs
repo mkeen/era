@@ -43,7 +43,7 @@ impl Config {
         chainsync::Stage {
             config: self,
             output: Default::default(),
-            historic_blocks_removed: Default::default(),
+            chain_tip: Default::default(),
             ctx,
             cursor,
         }

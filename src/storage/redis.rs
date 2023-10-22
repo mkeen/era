@@ -43,7 +43,7 @@ impl Config {
             input: Default::default(),
             storage_ops: Default::default(),
             chain_era: Default::default(),
-            chain_tip: Default::default(),
+            last_block: Default::default(),
             ctx,
         }
     }
@@ -93,7 +93,7 @@ pub struct Stage {
     chain_era: gasket::metrics::Gauge,
 
     #[metric]
-    chain_tip: gasket::metrics::Gauge,
+    last_block: gasket::metrics::Gauge,
 }
 
 pub struct Worker {
@@ -337,7 +337,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .block_buffer
                     .insert_block(&point, &block_bytes);
 
-                stage.chain_tip.set(point.slot_or_default() as i64);
+                stage.last_block.set(point.slot_or_default() as i64);
 
                 if *rollback {
                     stage.ctx.lock().await.block_buffer.remove_block(&point); // todo make these return a Result so we can use error handling

@@ -24,16 +24,15 @@ impl Worker {
     async fn reduce_block<'b>(
         &mut self,
         block_raw: &'b Vec<u8>,
-        block_parsed: &'b MultiEraBlock<'b>,
+        block_parsed: MultiEraBlock<'b>,
         rollback: bool,
-        block_ctx: &'b model::BlockContext,
+        block_ctx: &model::BlockContext,
         last_good_block_rollback_info: Option<(Point, u64)>,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-        error_policy: &'b crosscut::policies::RuntimePolicy,
-        reducers: &'b mut Vec<Reducer>,
+        reducers: &mut Vec<Reducer>,
         ops_count: &gasket::metrics::Counter,
         reducer_errors: &gasket::metrics::Counter,
-    ) -> Result<u64, gasket::framework::WorkerError> {
+    ) -> Result<(), WorkerError> {
         let point = match rollback {
             true => {
                 let (last_point, _) = last_good_block_rollback_info.clone().unwrap();
@@ -42,20 +41,12 @@ impl Worker {
             false => Point::Specific(block_parsed.slot(), block_parsed.hash().to_vec()),
         };
 
-        let number = match rollback {
-            true => {
-                let (_, last_number) = last_good_block_rollback_info.unwrap();
-                last_number
-            }
-            false => block_parsed.number(),
-        };
-
         output
             .lock()
             .await
             .send(model::CRDTCommand::block_starting(&block_parsed).into())
             .await
-            .or_panic()?;
+            .map_err(|_| WorkerError::Send)?;
 
         if rollback {
             log::warn!(
@@ -77,13 +68,15 @@ impl Worker {
 
         let results = futures::future::join_all(handles).await;
 
+        let mut errors = false;
+
         for (i, res) in results.into_iter().enumerate() {
             match res {
                 Ok(_) => {
                     ops_count.inc(1);
                 }
                 Err(_) => {
-                    log::warn!("error in { }", i);
+                    errors = true;
                     reducer_errors.inc(1);
                 }
             };
@@ -97,9 +90,12 @@ impl Worker {
                     .into(),
             )
             .await
-            .or_panic()?;
+            .map_err(|_| WorkerError::Send);
 
-        Ok(number)
+        match errors {
+            true => Err(WorkerError::Panic),
+            false => Ok(()),
+        }
     }
 }
 
@@ -120,8 +116,6 @@ pub fn bootstrap(
         input: Default::default(),
         output: Arc::new(Mutex::new(output)),
         ops_count: Default::default(),
-        last_block: Default::default(),
-        historic_blocks: Default::default(),
         reducer_errors: Default::default(),
     };
 
@@ -143,12 +137,6 @@ pub struct Stage {
 
     #[metric]
     ops_count: gasket::metrics::Counter,
-
-    #[metric]
-    last_block: gasket::metrics::Gauge,
-
-    #[metric]
-    historic_blocks: gasket::metrics::Counter,
 
     #[metric]
     reducer_errors: gasket::metrics::Counter,
@@ -175,48 +163,38 @@ impl gasket::framework::Worker<Stage> for Worker {
         unit: &EnrichedBlockPayload,
         stage: &mut Stage,
     ) -> Result<(), WorkerError> {
-        let error_policy = stage.ctx.lock().await.error_policy.clone();
-
         match unit {
             model::EnrichedBlockPayload::RollForward(block, ctx) => {
-                stage.historic_blocks.inc(1);
-                stage.last_block.set(
-                    self.reduce_block(
-                        &block,
-                        &MultiEraBlock::decode(block).unwrap(),
-                        false,
-                        &ctx,
-                        None,
-                        stage.output.clone(),
-                        &error_policy,
-                        &mut stage.reducers,
-                        &stage.ops_count,
-                        &stage.reducer_errors,
-                    )
-                    .await
-                    .unwrap() as i64,
-                );
+                let parsed_block = MultiEraBlock::decode(block).unwrap();
+
+                self.reduce_block(
+                    &block,
+                    parsed_block,
+                    false,
+                    &ctx,
+                    None,
+                    stage.output.clone(),
+                    &mut stage.reducers,
+                    &stage.ops_count,
+                    &stage.reducer_errors,
+                )
             }
+
             model::EnrichedBlockPayload::RollBack(block, ctx, last_block_rollback_info) => {
-                stage.last_block.set(
-                    self.reduce_block(
-                        &block,
-                        &MultiEraBlock::decode(block).unwrap(),
-                        true,
-                        &ctx,
-                        Some(last_block_rollback_info.clone()),
-                        stage.output.clone(),
-                        &error_policy,
-                        &mut stage.reducers,
-                        &stage.ops_count,
-                        &stage.reducer_errors,
-                    )
-                    .await
-                    .unwrap() as i64,
-                );
+                let parsed_block = MultiEraBlock::decode(block).unwrap();
+                self.reduce_block(
+                    &block,
+                    parsed_block,
+                    true,
+                    &ctx,
+                    Some(last_block_rollback_info.clone()),
+                    stage.output.clone(),
+                    &mut stage.reducers,
+                    &stage.ops_count,
+                    &stage.reducer_errors,
+                )
             }
         }
-
-        Ok(())
+        .await
     }
 }
