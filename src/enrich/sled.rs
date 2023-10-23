@@ -385,7 +385,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                                 stage.enrich_matches.inc(match_count);
                                 stage.enrich_mismatches.inc(mismatch_count);
 
-                                // and finally we remove utxos consumed by the block
                                 let (_, removed_count) =
                                     self.remove_consumed_utxos(db, consumed_ring, &txs).unwrap(); // not handling error, todo
 
@@ -403,7 +402,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                                     .map_err(|_| WorkerError::Send)
                                     .or_panic()
                             }
-                            None => Err(gasket::framework::WorkerError::Panic),
+                            None => Err(WorkerError::Panic),
                         };
 
                         match self
@@ -423,7 +422,11 @@ impl gasket::framework::Worker<Stage> for Worker {
                     }
 
                     model::RawBlockPayload::RollForwardGenesis => {
+                        log::warn!("got roll forward, gonna work it");
+
                         let all = genesis_utxos(&stage.ctx.lock().await.genesis_file).clone();
+                        let known_byron_hash =
+                            stage.ctx.lock().await.chain.byron_known_hash.clone();
 
                         for (i, utxo) in all.iter().enumerate() {
                             self.insert_genesis_utxo(&db, i as u64, &utxo, &stage.enrich_inserts)
@@ -432,21 +435,23 @@ impl gasket::framework::Worker<Stage> for Worker {
                                 .or_panic()?;
                         }
 
+                        log::warn!("got here dawg");
+
                         stage
                             .output
                             .send(model::EnrichedBlockPayload::roll_forward_genesis(
                                 genesis_utxos(&stage.ctx.lock().await.genesis_file),
                                 Hash::<32>::new(
-                                    hex::decode(
-                                        stage.ctx.lock().await.chain.byron_known_hash.clone(),
-                                    )
-                                    .unwrap()
-                                    .try_into()
-                                    .expect("invalid byron block hash"),
+                                    hex::decode(known_byron_hash)
+                                        .unwrap()
+                                        .try_into()
+                                        .expect("invalid byron block hash"),
                                 ),
                             ))
                             .await
                             .or_panic()?;
+
+                        log::warn!("didnt deadlock");
 
                         Ok(())
                     }

@@ -129,6 +129,7 @@ impl gasket::framework::Worker<Stage> for Worker {
 
         Ok(WorkSchedule::Unit(match self.at_origin {
             true => {
+                log::warn!("ROLLING GENESIS IN");
                 self.at_origin = false;
                 vec![RawBlockPayload::RollForwardGenesis]
             }
@@ -165,6 +166,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                         }
 
                         NextResponse::RollBackward(p, t) => {
+                            log::warn!("ROLLING BACKWARD {:?}", t);
+
                             stage.chain_tip.set(t.1 as i64);
 
                             let mut blocks =

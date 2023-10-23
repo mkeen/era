@@ -42,6 +42,8 @@ impl Worker {
 
         let mut handles = Vec::new();
 
+        log::warn!("i have been called to reduce");
+
         match (block_raw.clone(), genesis_utxos.clone(), genesis_hash) {
             (Some(block_raw), None, None) => match MultiEraBlock::decode(&block_raw) {
                 Ok(block_parsed) => {
@@ -202,6 +204,7 @@ impl gasket::framework::Worker<Stage> for Worker {
         unit: &EnrichedBlockPayload,
         stage: &mut Stage,
     ) -> Result<(), WorkerError> {
+        log::warn!("OK I MADE IT INTO THIS");
         match unit {
             model::EnrichedBlockPayload::RollForward(block, ctx) => self.reduce_block(
                 Some(block.clone()),

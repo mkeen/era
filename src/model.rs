@@ -100,7 +100,9 @@ impl EnrichedBlockPayload {
         utxos: Vec<GenesisUtxo>,
         genesis_block_hash: Hash<32>,
     ) -> gasket::messaging::Message<Self> {
-        Self::RollForwardGenesis(utxos, genesis_block_hash).into()
+        gasket::messaging::Message {
+            payload: Self::RollForwardGenesis(utxos, genesis_block_hash),
+        }
     }
 
     pub fn roll_forward(block: Vec<u8>, ctx: BlockContext) -> gasket::messaging::Message<Self> {
