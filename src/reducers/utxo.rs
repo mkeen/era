@@ -363,8 +363,10 @@ impl Reducer {
     ) -> Result<(), gasket::framework::WorkerError> {
         let policy = self.ctx.lock().await.error_policy.clone();
 
+        log::warn!("pwefwefoopwefwwef {:?}", block_ctx);
+
         match (block, block_ctx, genesis_utxos, genesis_hash) {
-            (Some(block), Some(block_ctx), None, None) => {
+            (Some(block), Some(block_ctx), _, _) => {
                 for tx in block.txs() {
                     if tx.is_valid() {
                         for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
@@ -394,14 +396,13 @@ impl Reducer {
                 Ok(())
             }
 
-            (None, None, Some(genesis_utxos), Some(genesis_hash)) => {
-                let mut address_lovelace_agg: HashMap<String, u64> = HashMap::new();
-
+            (None, None, Some(genesis_utxos), Some(_)) => {
+                // let mut address_lovelace_agg: HashMap<String, u64> = HashMap::new();
+                log::warn!("genesissss");
                 for utxo in genesis_utxos {
-                    *address_lovelace_agg
-                        .entry(hex::encode(utxo.1.to_vec()))
-                        .or_insert(0) += utxo.2;
-
+                    // *address_lovelace_agg
+                    //     .entry(hex::encode(utxo.1.to_vec()))
+                    //     .or_insert(0) += utxo.2;
                     let address = hex::encode(utxo.1.to_vec());
                     let key = format!("{}#{}", hex::encode(utxo.0), 0);
 

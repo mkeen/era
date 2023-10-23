@@ -361,6 +361,29 @@ impl gasket::framework::Worker<Stage> for Worker {
         match self.db_refs_all() {
             Ok(db_refs) => match db_refs {
                 Some((db, consumed_ring)) => match unit {
+                    model::RawBlockPayload::RollForwardGenesis => {
+                        log::warn!("genesis provided, working it");
+
+                        let all = genesis_utxos(&stage.ctx.lock().await.genesis_file).clone();
+
+                        for utxo in all {
+                            self.insert_genesis_utxo(&db, &utxo, &stage.enrich_inserts)
+                                .map_err(crate::Error::storage)
+                                .apply_policy(&policy)
+                                .or_panic()?;
+                        }
+
+                        stage
+                            .output
+                            .send(model::EnrichedBlockPayload::roll_forward_genesis(
+                                genesis_utxos(&stage.ctx.lock().await.genesis_file),
+                            ))
+                            .await
+                            .or_panic()?;
+
+                        Ok(())
+                    }
+
                     model::RawBlockPayload::RollForward(cbor) => {
                         log::warn!("rolling forward");
 
@@ -412,29 +435,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                             }
                             None => Err(WorkerError::Panic),
                         }
-                    }
-
-                    model::RawBlockPayload::RollForwardGenesis => {
-                        log::warn!("genesis provided, working it");
-
-                        let all = genesis_utxos(&stage.ctx.lock().await.genesis_file).clone();
-
-                        for utxo in all {
-                            self.insert_genesis_utxo(&db, &utxo, &stage.enrich_inserts)
-                                .map_err(crate::Error::storage)
-                                .apply_policy(&policy)
-                                .or_panic()?;
-                        }
-
-                        stage
-                            .output
-                            .send(model::EnrichedBlockPayload::roll_forward_genesis(
-                                genesis_utxos(&stage.ctx.lock().await.genesis_file),
-                            ))
-                            .await
-                            .or_panic()?;
-
-                        Ok(())
                     }
 
                     model::RawBlockPayload::RollBack(

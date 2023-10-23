@@ -71,21 +71,13 @@ impl Worker {
                         .await
                         .map_err(|_| WorkerError::Send)?;
 
-                    if rollback {
-                        log::warn!(
-                            "rolling back {}.{}",
-                            block_parsed.slot(),
-                            block_parsed.hash().to_string(),
-                        );
-                    }
-
                     Ok(())
                 }
 
                 Err(_) => Err(gasket::framework::WorkerError::Panic),
             },
 
-            (None, Some(byron_genesis_hash), Some(_)) => {
+            (_, Some(byron_genesis_hash), Some(_)) => {
                 point = Point::Specific(0, byron_genesis_hash.to_vec());
                 log::warn!("i have been called to reduce 0,0");
 
@@ -120,19 +112,21 @@ impl Worker {
 
         let mut errors = false;
 
-        for (i, res) in results.into_iter().enumerate() {
+        let mut n = 0;
+
+        for res in results {
             match res {
                 Ok(_) => {
                     ops_count.inc(1);
                 }
-                Err(_) => {
+                Err(e) => {
                     errors = true;
+                    log::warn!("reducer error! {:?} {}", e, n);
                     reducer_errors.inc(1);
+                    n += 1;
                 }
             };
         }
-
-        log::warn!("i have finished reducing {:?}", point.clone());
 
         output
             .lock()
@@ -140,6 +134,8 @@ impl Worker {
             .send(model::CRDTCommand::block_finished(point.clone(), block_raw, rollback).into())
             .await
             .map_err(|_| WorkerError::Send)?;
+
+        log::warn!("i have finished reducing {:?}", point.clone());
 
         match errors {
             true => Err(WorkerError::Panic),
