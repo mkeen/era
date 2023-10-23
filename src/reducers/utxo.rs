@@ -397,13 +397,13 @@ impl Reducer {
             (None, None, Some(genesis_utxos), Some(genesis_hash)) => {
                 let mut address_lovelace_agg: HashMap<String, u64> = HashMap::new();
 
-                for (i, utxo) in genesis_utxos.iter().enumerate() {
+                for utxo in genesis_utxos {
                     *address_lovelace_agg
                         .entry(hex::encode(utxo.1.to_vec()))
                         .or_insert(0) += utxo.2;
 
                     let address = hex::encode(utxo.1.to_vec());
-                    let key = format!("{}#{}", hex::encode(utxo.0), i);
+                    let key = format!("{}#{}", hex::encode(utxo.0), 0);
 
                     self.tx_state(output.clone(), &address, &key, true).await?;
 

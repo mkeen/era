@@ -137,7 +137,7 @@ impl gasket::framework::Worker<Stage> for Worker {
         &mut self,
         stage: &mut Stage,
     ) -> Result<WorkSchedule<CRDTCommand>, WorkerError> {
-        let msg = stage.input.recv().await.or_panic()?;
+        let msg = stage.input.recv().await.or_retry()?;
         Ok(WorkSchedule::Unit(msg.payload))
     }
 
@@ -151,14 +151,14 @@ impl gasket::framework::Worker<Stage> for Worker {
                 // start redis transaction
                 redis::cmd("MULTI")
                     .query(self.connection.as_mut().unwrap())
-                    .or_restart()
+                    .or_retry()
             }
             model::CRDTCommand::GrowOnlySetAdd(key, member) => self
                 .connection
                 .as_mut()
                 .unwrap()
                 .sadd(key, member)
-                .or_restart(),
+                .or_retry(),
             model::CRDTCommand::SetAdd(key, member) => {
                 log::debug!("adding to set [{}], value [{}]", key, member);
 
@@ -166,7 +166,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .sadd(key, member)
-                    .or_restart()
+                    .or_retry()
             }
             model::CRDTCommand::SetRemove(key, member) => {
                 log::debug!("removing from set [{}], value [{}]", key, member);
@@ -175,7 +175,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .srem(key, member)
-                    .or_restart()
+                    .or_retry()
             }
             model::CRDTCommand::LastWriteWins(key, member, ts) => {
                 log::debug!("last write for [{}], slot [{}]", key, ts);
@@ -184,7 +184,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .zadd(key, member, ts)
-                    .or_restart()
+                    .or_retry()
             }
             model::CRDTCommand::SortedSetAdd(key, member, delta) => {
                 log::debug!(
@@ -198,7 +198,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .zincr(key, member, delta)
-                    .or_restart()
+                    .or_retry()
             }
             model::CRDTCommand::SortedSetMemberRemove(key, member) => {
                 log::debug!("sorted set member remove [{}], value [{}]", key, member);
@@ -207,7 +207,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .zrem(&key, member)
-                    .or_restart()
+                    .or_retry()
             }
             model::CRDTCommand::SortedSetRemove(key, member, delta) => {
                 log::debug!(
@@ -221,21 +221,17 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .zrembyscore(&key, member, delta)
-                    .or_restart()
+                    .or_retry()
             }
             model::CRDTCommand::Spoil(key) => {
                 log::debug!("overwrite [{}]", key);
 
-                self.connection.as_mut().unwrap().del(key).or_restart()
+                self.connection.as_mut().unwrap().del(key).or_retry()
             }
             model::CRDTCommand::AnyWriteWins(key, value) => {
                 log::debug!("overwrite [{}]", key);
 
-                self.connection
-                    .as_mut()
-                    .unwrap()
-                    .set(key, value)
-                    .or_restart()
+                self.connection.as_mut().unwrap().set(key, value).or_retry()
             }
             model::CRDTCommand::PNCounter(key, delta) => {
                 log::debug!("increasing counter [{}], by [{}]", key, delta);
@@ -250,7 +246,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                             .arg(delta.to_string()),
                     )
                     .and_then(|_| Ok(()))
-                    .or_restart()
+                    .or_retry()
             }
             model::CRDTCommand::HashSetMulti(key, members, values) => {
                 log::debug!(
@@ -269,7 +265,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .hset_multiple(key, &tuples)
-                    .or_restart()
+                    .or_retry()
             }
             model::CRDTCommand::HashSetValue(key, member, value) => {
                 log::debug!("setting hash key {} member {}", key, member);
@@ -278,7 +274,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .hset(key, member, value)
-                    .or_restart()
+                    .or_retry()
             }
             model::CRDTCommand::HashCounter(key, member, delta) => {
                 log::debug!(
@@ -299,7 +295,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                             .arg(delta.to_string()),
                     )
                     .and_then(|_| Ok(()))
-                    .or_restart()
+                    .or_retry()
             }
             model::CRDTCommand::HashUnsetKey(key, member) => {
                 log::debug!("deleting hash key {} member {}", key, member);
@@ -308,7 +304,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .hdel(member, key)
-                    .or_restart()
+                    .or_retry()
             }
             model::CRDTCommand::UnsetKey(key) => {
                 log::debug!("deleting key {}", key);
@@ -334,12 +330,12 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .set(stage.config.cursor_key(), &cursor_str)
-                    .or_restart()?;
+                    .or_retry()?;
 
                 // end redis transaction
                 redis::cmd("EXEC")
                     .query(self.connection.as_mut().unwrap())
-                    .or_restart()?;
+                    .or_retry()?;
 
                 match (block_bytes, parsed_block) {
                     (Some(block_bytes), Some(parsed_block)) => {

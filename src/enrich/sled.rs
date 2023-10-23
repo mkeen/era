@@ -143,7 +143,6 @@ impl Worker {
     fn insert_genesis_utxo(
         &self,
         db: &sled::Db,
-        idx: u64,
         genesis_utxo: &GenesisUtxo,
         inserts: &gasket::metrics::Counter,
     ) -> Result<(), crate::Error> {
@@ -154,7 +153,7 @@ impl Worker {
         let value: IVec = SledTxValue(0, encoded_genesis_utxo).try_into()?;
         inserts.inc(1);
 
-        db.insert(format!("{}#{}", genesis_utxo.0, idx).as_bytes(), value)
+        db.insert(format!("{}#{}", genesis_utxo.0, "0").as_bytes(), value)
             .map_err(Error::storage)?;
 
         Ok(())
@@ -363,6 +362,8 @@ impl gasket::framework::Worker<Stage> for Worker {
             Ok(db_refs) => match db_refs {
                 Some((db, consumed_ring)) => match unit {
                     model::RawBlockPayload::RollForward(cbor) => {
+                        log::warn!("rolling forward");
+
                         let block = MultiEraBlock::decode(&cbor)
                             .map_err(crate::Error::cbor)
                             .apply_policy(&policy)
@@ -372,7 +373,7 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                         let txs = block.txs();
 
-                        let out = match self
+                        match self
                             .par_fetch_referenced_utxos(db, block.number(), &txs)
                             .apply_policy(&policy)
                             .or_restart()?
@@ -396,36 +397,30 @@ impl gasket::framework::Worker<Stage> for Worker {
                                     ))
                                     .await
                                     .map_err(|_| WorkerError::Send)
-                                    .or_panic()
+                                    .or_panic()?;
+
+                                match self
+                                    .insert_produced_utxos(db, &txs, &stage.enrich_inserts)
+                                    .map_err(crate::Error::storage)
+                                    .apply_policy(&policy)
+                                    .or_panic()?
+                                {
+                                    Some(_) => Ok(()),
+
+                                    None => Err(WorkerError::Panic),
+                                }
                             }
                             None => Err(WorkerError::Panic),
-                        };
-
-                        match self
-                            .insert_produced_utxos(db, &txs, &stage.enrich_inserts)
-                            .map_err(crate::Error::storage)
-                            .apply_policy(&policy)
-                            .or_panic()?
-                        {
-                            Some(_) => {}
-
-                            None => {
-                                crate::Error::storage("save_produced fail");
-                            }
-                        };
-
-                        out
+                        }
                     }
 
                     model::RawBlockPayload::RollForwardGenesis => {
                         log::warn!("genesis provided, working it");
 
                         let all = genesis_utxos(&stage.ctx.lock().await.genesis_file).clone();
-                        let known_byron_hash =
-                            stage.ctx.lock().await.chain.byron_known_hash.clone();
 
-                        for (i, utxo) in all.iter().enumerate() {
-                            self.insert_genesis_utxo(&db, i as u64, &utxo, &stage.enrich_inserts)
+                        for utxo in all {
+                            self.insert_genesis_utxo(&db, &utxo, &stage.enrich_inserts)
                                 .map_err(crate::Error::storage)
                                 .apply_policy(&policy)
                                 .or_panic()?;
