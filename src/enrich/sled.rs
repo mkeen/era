@@ -4,7 +4,6 @@ use gasket::framework::*;
 
 use gasket::messaging::tokio::{InputPort, OutputPort};
 
-use pallas::codec::minicbor::Encode;
 use pallas::crypto::hash::Hash;
 use pallas::ledger::configs::byron::{genesis_utxos, GenesisUtxo};
 
@@ -20,13 +19,11 @@ use tokio::sync::Mutex;
 
 use crate::pipeline::Context;
 use crate::prelude::AppliesPolicy;
-use crate::{crosscut, Error};
+use crate::Error;
 use crate::{
     model::{self, BlockContext, EnrichedBlockPayload, RawBlockPayload},
     pipeline,
 };
-
-use std::io::prelude::*;
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
@@ -150,9 +147,8 @@ impl Worker {
         genesis_utxo: &GenesisUtxo,
         inserts: &gasket::metrics::Counter,
     ) -> Result<(), crate::Error> {
-        let mut insert_batch = sled::Batch::default();
-
         let mut encoded_genesis_utxo = vec![];
+
         minicbor::encode(genesis_utxo, &mut encoded_genesis_utxo).unwrap();
 
         let value: IVec = SledTxValue(0, encoded_genesis_utxo).try_into()?;
@@ -422,7 +418,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     }
 
                     model::RawBlockPayload::RollForwardGenesis => {
-                        log::warn!("got roll forward, gonna work it");
+                        log::warn!("genesis provided, working it");
 
                         let all = genesis_utxos(&stage.ctx.lock().await.genesis_file).clone();
                         let known_byron_hash =
@@ -435,23 +431,13 @@ impl gasket::framework::Worker<Stage> for Worker {
                                 .or_panic()?;
                         }
 
-                        log::warn!("got here dawg");
-
                         stage
                             .output
                             .send(model::EnrichedBlockPayload::roll_forward_genesis(
                                 genesis_utxos(&stage.ctx.lock().await.genesis_file),
-                                Hash::<32>::new(
-                                    hex::decode(known_byron_hash)
-                                        .unwrap()
-                                        .try_into()
-                                        .expect("invalid byron block hash"),
-                                ),
                             ))
                             .await
                             .or_panic()?;
-
-                        log::warn!("didnt deadlock");
 
                         Ok(())
                     }

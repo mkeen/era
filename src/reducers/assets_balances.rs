@@ -285,28 +285,41 @@ impl Reducer {
         error_policy: &crosscut::policies::RuntimePolicy,
         timeslot: u64,
     ) -> Result<(), gasket::framework::WorkerError> {
-        if let Some(spent_output) = ctx
-            .find_utxo(&mei.output_ref())
-            .apply_policy(error_policy)
-            .or_panic()?
-        {
-            let spent_from_soa =
-                self.stake_or_address_from_address(&spent_output.address().unwrap());
+        match ctx.find_utxo(&mei.output_ref()) {
+            Ok(spent_output) => {
+                let spent_from_soa =
+                    self.stake_or_address_from_address(&spent_output.address().unwrap());
 
-            self.process_asset_movement(
-                output,
-                &spent_from_soa,
-                spent_output.lovelace_amount(),
-                &spent_output.non_ada_assets(),
-                !rollback,
-                slot,
-                timeslot,
-            )
-            .await
-            .or_panic()?;
+                self.process_asset_movement(
+                    output,
+                    &spent_from_soa,
+                    spent_output.lovelace_amount(),
+                    &spent_output.non_ada_assets(),
+                    !rollback,
+                    slot,
+                    timeslot,
+                )
+                .await
+                .or_panic()
+            }
+
+            Err(_) => match ctx.find_genesis_utxo(&mei.output_ref()) {
+                Ok(genesis_utxo) => self
+                    .process_asset_movement(
+                        output,
+                        &hex::encode(&genesis_utxo.1.to_vec()),
+                        genesis_utxo.2,
+                        &Default::default(),
+                        !rollback,
+                        slot,
+                        timeslot,
+                    )
+                    .await
+                    .or_panic(),
+
+                Err(_) => Err(gasket::framework::WorkerError::Panic),
+            },
         }
-
-        Ok(())
     }
 
     pub async fn reduce<'b>(

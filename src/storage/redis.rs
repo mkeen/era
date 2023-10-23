@@ -142,21 +142,23 @@ impl gasket::framework::Worker<Stage> for Worker {
     }
 
     async fn execute(&mut self, unit: &CRDTCommand, stage: &mut Stage) -> Result<(), WorkerError> {
+        stage.storage_ops.inc(1);
+
         match unit {
-            model::CRDTCommand::Noop => Ok(())?,
+            model::CRDTCommand::Noop => Ok(()),
             model::CRDTCommand::BlockStarting(_) => {
+                log::warn!("starting block");
                 // start redis transaction
                 redis::cmd("MULTI")
                     .query(self.connection.as_mut().unwrap())
-                    .or_restart()?;
+                    .or_restart()
             }
-            model::CRDTCommand::GrowOnlySetAdd(key, member) => {
-                self.connection
-                    .as_mut()
-                    .unwrap()
-                    .sadd(key, member)
-                    .or_restart()?;
-            }
+            model::CRDTCommand::GrowOnlySetAdd(key, member) => self
+                .connection
+                .as_mut()
+                .unwrap()
+                .sadd(key, member)
+                .or_restart(),
             model::CRDTCommand::SetAdd(key, member) => {
                 log::debug!("adding to set [{}], value [{}]", key, member);
 
@@ -164,7 +166,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .sadd(key, member)
-                    .or_restart()?;
+                    .or_restart()
             }
             model::CRDTCommand::SetRemove(key, member) => {
                 log::debug!("removing from set [{}], value [{}]", key, member);
@@ -173,7 +175,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .srem(key, member)
-                    .or_restart()?;
+                    .or_restart()
             }
             model::CRDTCommand::LastWriteWins(key, member, ts) => {
                 log::debug!("last write for [{}], slot [{}]", key, ts);
@@ -182,7 +184,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .zadd(key, member, ts)
-                    .or_restart()?;
+                    .or_restart()
             }
             model::CRDTCommand::SortedSetAdd(key, member, delta) => {
                 log::debug!(
@@ -196,7 +198,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .zincr(key, member, delta)
-                    .or_restart()?;
+                    .or_restart()
             }
             model::CRDTCommand::SortedSetMemberRemove(key, member) => {
                 log::debug!("sorted set member remove [{}], value [{}]", key, member);
@@ -205,7 +207,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .zrem(&key, member)
-                    .or_restart()?;
+                    .or_restart()
             }
             model::CRDTCommand::SortedSetRemove(key, member, delta) => {
                 log::debug!(
@@ -219,12 +221,12 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .zrembyscore(&key, member, delta)
-                    .or_restart()?;
+                    .or_restart()
             }
             model::CRDTCommand::Spoil(key) => {
                 log::debug!("overwrite [{}]", key);
 
-                self.connection.as_mut().unwrap().del(key).or_restart()?;
+                self.connection.as_mut().unwrap().del(key).or_restart()
             }
             model::CRDTCommand::AnyWriteWins(key, value) => {
                 log::debug!("overwrite [{}]", key);
@@ -233,7 +235,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .set(key, value)
-                    .or_restart()?;
+                    .or_restart()
             }
             model::CRDTCommand::PNCounter(key, delta) => {
                 log::debug!("increasing counter [{}], by [{}]", key, delta);
@@ -247,7 +249,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                             .arg(key)
                             .arg(delta.to_string()),
                     )
-                    .or_restart()?;
+                    .and_then(|_| Ok(()))
+                    .or_restart()
             }
             model::CRDTCommand::HashSetMulti(key, members, values) => {
                 log::debug!(
@@ -266,7 +269,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .hset_multiple(key, &tuples)
-                    .or_restart()?;
+                    .or_restart()
             }
             model::CRDTCommand::HashSetValue(key, member, value) => {
                 log::debug!("setting hash key {} member {}", key, member);
@@ -275,7 +278,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .hset(key, member, value)
-                    .or_restart()?;
+                    .or_restart()
             }
             model::CRDTCommand::HashCounter(key, member, delta) => {
                 log::debug!(
@@ -295,7 +298,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                             .arg(member.clone())
                             .arg(delta.to_string()),
                     )
-                    .or_restart()?;
+                    .and_then(|_| Ok(()))
+                    .or_restart()
             }
             model::CRDTCommand::HashUnsetKey(key, member) => {
                 log::debug!("deleting hash key {} member {}", key, member);
@@ -304,25 +308,27 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .hdel(member, key)
-                    .or_restart()?;
+                    .or_restart()
             }
             model::CRDTCommand::UnsetKey(key) => {
                 log::debug!("deleting key {}", key);
 
-                self.connection.as_mut().unwrap().del(key).or_restart()?;
+                self.connection.as_mut().unwrap().del(key).or_restart()
             }
             model::CRDTCommand::BlockFinished(point, block_bytes, rollback) => {
                 let cursor_str = crosscut::PointArg::from(point.clone()).to_string();
 
-                match block_bytes.clone() {
+                let parsed_block = match block_bytes {
                     Some(block_bytes) => {
                         let block = MultiEraBlock::decode(&block_bytes).unwrap();
                         stage.chain_era.set(string_to_i64(block.era().to_string()));
+                        Some(block)
                     }
                     None => {
                         stage.chain_era.set(string_to_i64("Byron".to_string()));
+                        None
                     }
-                }
+                };
 
                 self.connection
                     .as_mut()
@@ -335,40 +341,39 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .query(self.connection.as_mut().unwrap())
                     .or_restart()?;
 
-                match block_bytes.clone() {
-                    Some(block_bytes) => {
-                        let block = MultiEraBlock::decode(&block_bytes).unwrap();
+                match (block_bytes, parsed_block) {
+                    (Some(block_bytes), Some(parsed_block)) => {
+                        stage.last_block.set(point.slot_or_default() as i64);
+
+                        stage
+                            .chain_era
+                            .set(string_to_i64(parsed_block.era().to_string()));
+
+                        log::debug!(
+                            "new cursor saved to redis {} {}",
+                            &stage.config.cursor_key(),
+                            &cursor_str
+                        );
+
+                        if *rollback {
+                            stage.ctx.lock().await.block_buffer.remove_block(&point);
+                        }
+
                         stage
                             .ctx
                             .lock()
                             .await
                             .block_buffer
-                            .insert_block(&point, &block_bytes);
+                            .insert_block(&point, block_bytes);
 
-                        if *rollback {
-                            stage.ctx.lock().await.block_buffer.remove_block(&point);
-                            // todo make these return a Result so we can use error handling
-                        }
-
-                        stage.chain_era.set(string_to_i64(block.era().to_string()));
+                        Ok(())
                     }
-                    None => {
+                    _ => {
                         stage.chain_era.set(string_to_i64("Byron".to_string()));
+                        Ok(())
                     }
                 }
-
-                stage.last_block.set(point.slot_or_default() as i64);
-
-                log::info!(
-                    "new cursor saved to redis {} {}",
-                    &stage.config.cursor_key(),
-                    &cursor_str
-                );
             }
-        };
-
-        stage.storage_ops.inc(1);
-
-        Ok(())
+        }
     }
 }

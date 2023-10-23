@@ -127,26 +127,22 @@ impl gasket::framework::Worker<Stage> for Worker {
     ) -> Result<WorkSchedule<Vec<RawBlockPayload>>, WorkerError> {
         let peer = self.peer.as_mut().unwrap();
 
-        Ok(WorkSchedule::Unit(match self.at_origin {
+        Ok(match self.at_origin {
             true => {
-                log::warn!("ROLLING GENESIS IN");
                 self.at_origin = false;
-                vec![RawBlockPayload::RollForwardGenesis]
+                WorkSchedule::Unit(vec![RawBlockPayload::RollForwardGenesis])
             }
             false => match peer.chainsync.has_agency() {
                 true => match peer.chainsync.request_next().await.or_restart() {
                     Ok(next) => match next {
                         NextResponse::RollForward(cbor, t) => {
-                            log::warn!("ROLLING FORWARD {:?}", t);
-
                             stage.chain_tip.set(t.1 as i64);
-
                             stage
                                 .ctx
                                 .lock()
                                 .await
                                 .block_buffer
-                                .block_mem_add(RawBlockPayload::RollForward(cbor.0));
+                                .block_mem_add(RawBlockPayload::RollForward(cbor.0.clone()));
 
                             let current_buffer_depth =
                                 stage.ctx.lock().await.block_buffer.block_mem_size();
@@ -154,27 +150,26 @@ impl gasket::framework::Worker<Stage> for Worker {
                             match current_buffer_depth >= self.min_depth {
                                 true => {
                                     match stage.ctx.lock().await.block_buffer.block_mem_take_all() {
-                                        Some(blocks) => blocks,
-                                        None => vec![],
+                                        Some(blocks) => match blocks.len() > 0 {
+                                            true => WorkSchedule::Unit(blocks),
+                                            false => WorkSchedule::Idle,
+                                        },
+                                        None => WorkSchedule::Idle,
                                     }
                                 }
 
-                                false => {
-                                    vec![]
-                                }
+                                false => WorkSchedule::Idle,
                             }
                         }
 
                         NextResponse::RollBackward(p, t) => {
-                            log::warn!("ROLLING BACKWARD {:?}", t);
-
-                            stage.chain_tip.set(t.1 as i64);
-
                             let mut blocks =
                                 match stage.ctx.lock().await.block_buffer.block_mem_take_all() {
                                     Some(blocks) => blocks,
                                     None => vec![],
                                 };
+
+                            stage.chain_tip.set(t.1 as i64);
 
                             let rollback_count = stage
                                 .ctx
@@ -209,15 +204,20 @@ impl gasket::framework::Worker<Stage> for Worker {
                                 }
                             }
 
-                            blocks
+                            // Todo Check blocks for any blocks that should not be applied due to this specific rollback
+
+                            match blocks.len() > 0 {
+                                true => {
+                                    log::warn!("ROLLING BACKWARD {:?} {}", t, blocks.len());
+                                    WorkSchedule::Unit(blocks)
+                                }
+                                false => WorkSchedule::Idle,
+                            }
                         }
 
-                        NextResponse::Await => vec![],
+                        NextResponse::Await => WorkSchedule::Idle,
                     },
-                    Err(_) => {
-                        log::warn!("got no response");
-                        vec![]
-                    }
+                    Err(_) => WorkSchedule::Idle,
                 },
                 false => {
                     log::info!("awaiting next block (blocking)");
@@ -231,11 +231,8 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                             match n {
                                 NextResponse::RollForward(cbor, t) => {
-                                    log::warn!("rolling forward");
-
-                                    blocks.push(RawBlockPayload::RollForward(cbor.0));
-
-                                    blocks
+                                    log::warn!("rolling forward with chain");
+                                    WorkSchedule::Unit(vec![RawBlockPayload::RollForward(cbor.0)])
                                 }
                                 NextResponse::RollBackward(p, t) => {
                                     stage
@@ -284,16 +281,19 @@ impl gasket::framework::Worker<Stage> for Worker {
                                         }
                                     }
 
-                                    blocks
+                                    match blocks.len() > 0 {
+                                        true => WorkSchedule::Unit(blocks),
+                                        false => WorkSchedule::Idle,
+                                    }
                                 }
-                                NextResponse::Await => blocks,
+                                NextResponse::Await => WorkSchedule::Idle,
                             }
                         }
-                        Err(_) => vec![],
+                        Err(_) => WorkSchedule::Idle,
                     }
                 }
             },
-        }))
+        })
     }
 
     async fn execute(
@@ -302,13 +302,38 @@ impl gasket::framework::Worker<Stage> for Worker {
         stage: &mut Stage,
     ) -> Result<(), WorkerError> {
         for raw_block_payload in unit {
-            stage
-                .output
-                .send(gasket::messaging::Message {
-                    payload: raw_block_payload.clone(),
-                })
-                .await
-                .or_panic()?;
+            match raw_block_payload {
+                RawBlockPayload::RollForward(block) => {
+                    match !block.is_empty() && MultiEraBlock::decode(&block).unwrap().slot() > 0 {
+                        true => {
+                            stage
+                                .output
+                                .send(gasket::messaging::Message {
+                                    payload: raw_block_payload.clone(),
+                                })
+                                .await
+                        }
+                        false => Ok(()),
+                    }
+                }
+                RawBlockPayload::RollBack(_, _) => {
+                    stage
+                        .output
+                        .send(gasket::messaging::Message {
+                            payload: raw_block_payload.clone(),
+                        })
+                        .await
+                }
+                RawBlockPayload::RollForwardGenesis => {
+                    stage
+                        .output
+                        .send(gasket::messaging::Message {
+                            payload: raw_block_payload.clone(),
+                        })
+                        .await
+                }
+            }
+            .map_err(|_| WorkerError::Send)?;
         }
 
         Ok(())

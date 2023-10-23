@@ -4,7 +4,6 @@ use std::convert::Into;
 
 use pallas::codec::minicbor::{self, Decode, Encode};
 use pallas::crypto::hash::Hash;
-use pallas::ledger::addresses::ByronAddress;
 use pallas::ledger::configs::byron::GenesisUtxo;
 use pallas::{
     ledger::traverse::{Era, MultiEraBlock, MultiEraOutput, MultiEraTx, OutputRef},
@@ -58,50 +57,30 @@ impl BlockContext {
     }
 
     pub fn find_genesis_utxo(&self, key: &OutputRef) -> Result<GenesisUtxo, Error> {
-        let (era, cbor) = self
+        let (_, cbor) = self
             .utxos
             .get(&key.to_string())
             .ok_or_else(|| Error::missing_utxo(key))?;
 
-        minicbor::decode(cbor).map_err(Error::storage)
+        minicbor::decode(cbor).map_err(Error::cbor)
     }
 
     pub fn get_all_keys(&self) -> Vec<String> {
         self.utxos.keys().map(|x| x.clone()).collect()
-    }
-
-    pub fn find_consumed_txos(
-        &self,
-        tx: &MultiEraTx,
-    ) -> Result<Vec<(OutputRef, MultiEraOutput)>, Error> {
-        let items = tx
-            .consumes()
-            .iter()
-            .map(|i| i.output_ref())
-            .map(|r| self.find_utxo(&r).map(|u| (r, u)))
-            .collect::<Result<Vec<_>, _>>()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-
-        Ok(items)
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum EnrichedBlockPayload {
     RollForward(Vec<u8>, BlockContext),
-    RollForwardGenesis(Vec<GenesisUtxo>, Hash<32>),
+    RollForwardGenesis(Vec<GenesisUtxo>),
     RollBack(Vec<u8>, BlockContext, (Point, u64)),
 }
 
 impl EnrichedBlockPayload {
-    pub fn roll_forward_genesis(
-        utxos: Vec<GenesisUtxo>,
-        genesis_block_hash: Hash<32>,
-    ) -> gasket::messaging::Message<Self> {
+    pub fn roll_forward_genesis(utxos: Vec<GenesisUtxo>) -> gasket::messaging::Message<Self> {
         gasket::messaging::Message {
-            payload: Self::RollForwardGenesis(utxos, genesis_block_hash),
+            payload: Self::RollForwardGenesis(utxos),
         }
     }
 
