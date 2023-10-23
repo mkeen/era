@@ -7,17 +7,18 @@ use era::{
     reducers, sources, storage,
 };
 use gasket::runtime::spawn_stage;
+use pallas::ledger::{configs::byron::from_file, traverse::wellknown::GenesisValues};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum ChainConfig {
     Mainnet,
     Testnet,
     PreProd,
     Preview,
-    Custom(crosscut::ChainWellKnownInfo),
+    Custom(GenesisValues),
 }
 
 impl Default for ChainConfig {
@@ -26,13 +27,13 @@ impl Default for ChainConfig {
     }
 }
 
-impl From<ChainConfig> for crosscut::ChainWellKnownInfo {
+impl From<ChainConfig> for GenesisValues {
     fn from(other: ChainConfig) -> Self {
         match other {
-            ChainConfig::Mainnet => crosscut::ChainWellKnownInfo::mainnet(),
-            ChainConfig::Testnet => crosscut::ChainWellKnownInfo::testnet(),
-            ChainConfig::PreProd => crosscut::ChainWellKnownInfo::preprod(),
-            ChainConfig::Preview => crosscut::ChainWellKnownInfo::preview(),
+            ChainConfig::Mainnet => GenesisValues::mainnet(),
+            ChainConfig::Testnet => GenesisValues::testnet(),
+            ChainConfig::PreProd => GenesisValues::preprod(),
+            ChainConfig::Preview => GenesisValues::preview(),
             ChainConfig::Custom(x) => x,
         }
     }
@@ -49,6 +50,7 @@ struct ConfigRoot {
     chain: Option<ChainConfig>,
     blocks: Option<crosscut::historic::BlockConfig>,
     policy: Option<crosscut::policies::RuntimePolicy>,
+    genesis: Option<String>,
 }
 
 impl ConfigRoot {
@@ -77,14 +79,27 @@ pub fn run(args: &Args) -> Result<(), era::Error> {
     let config = ConfigRoot::new(&args.config)
         .map_err(|err| era::Error::ConfigError(format!("{:?}", err)))?;
 
+    let chain_config = config.chain.unwrap_or_default();
+
     spawn_stage(
         pipeline::Pipeline::bootstrap(
             Arc::new(Mutex::new(Context {
-                chain: config.chain.unwrap_or_default().into(),
+                chain: chain_config.clone().into(),
                 intersect: config.intersect,
                 finalize: config.finalize,
                 error_policy: config.policy.unwrap_or_default(),
                 block_buffer: config.blocks.unwrap().into(),
+                genesis_file: from_file(std::path::Path::new(&config.genesis.unwrap_or(format!(
+                    "/etc/era/{}-byron-genesis.json",
+                    match chain_config {
+                        ChainConfig::Mainnet => "mainnet",
+                        ChainConfig::Testnet => "testnet",
+                        ChainConfig::PreProd => "preprod",
+                        ChainConfig::Preview => "preview",
+                        _ => "",
+                    }
+                ))))
+                .unwrap(),
             })),
             config.source,
             config.enrich.unwrap_or_default(),

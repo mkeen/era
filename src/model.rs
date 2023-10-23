@@ -2,6 +2,10 @@ use std::{collections::HashMap, fmt::Debug};
 
 use std::convert::Into;
 
+use pallas::codec::minicbor::{self, Decode, Encode};
+use pallas::crypto::hash::Hash;
+use pallas::ledger::addresses::ByronAddress;
+use pallas::ledger::configs::byron::GenesisUtxo;
 use pallas::{
     ledger::traverse::{Era, MultiEraBlock, MultiEraOutput, MultiEraTx, OutputRef},
     network::miniprotocols::Point,
@@ -11,6 +15,7 @@ use crate::prelude::*;
 
 #[derive(Debug, Clone)]
 pub enum RawBlockPayload {
+    RollForwardGenesis,
     RollForward(Vec<u8>),
     RollBack(Vec<u8>, (Point, u64)),
 }
@@ -52,6 +57,15 @@ impl BlockContext {
         MultiEraOutput::decode(*era, cbor).map_err(crate::Error::cbor)
     }
 
+    pub fn find_genesis_utxo(&self, key: &OutputRef) -> Result<GenesisUtxo, Error> {
+        let (era, cbor) = self
+            .utxos
+            .get(&key.to_string())
+            .ok_or_else(|| Error::missing_utxo(key))?;
+
+        minicbor::decode(cbor).map_err(Error::storage)
+    }
+
     pub fn get_all_keys(&self) -> Vec<String> {
         self.utxos.keys().map(|x| x.clone()).collect()
     }
@@ -77,10 +91,18 @@ impl BlockContext {
 #[derive(Debug, Clone)]
 pub enum EnrichedBlockPayload {
     RollForward(Vec<u8>, BlockContext),
+    RollForwardGenesis(Vec<GenesisUtxo>, Hash<32>),
     RollBack(Vec<u8>, BlockContext, (Point, u64)),
 }
 
 impl EnrichedBlockPayload {
+    pub fn roll_forward_genesis(
+        utxos: Vec<GenesisUtxo>,
+        genesis_block_hash: Hash<32>,
+    ) -> gasket::messaging::Message<Self> {
+        Self::RollForwardGenesis(utxos, genesis_block_hash).into()
+    }
+
     pub fn roll_forward(block: Vec<u8>, ctx: BlockContext) -> gasket::messaging::Message<Self> {
         gasket::messaging::Message {
             payload: Self::RollForward(block, ctx),
@@ -149,17 +171,32 @@ pub enum CRDTCommand {
     HashSetMulti(Key, Vec<Member>, Vec<Value>),
     HashUnsetKey(Key, Member),
     UnsetKey(Key),
-    BlockFinished(Point, Vec<u8>, bool),
+    BlockFinished(Point, Option<Vec<u8>>, bool),
     Noop,
 }
 
 impl CRDTCommand {
-    pub fn block_starting(block: &MultiEraBlock) -> CRDTCommand {
-        log::debug!("block starting");
-        let hash = block.hash();
-        let slot = block.slot();
-        let point = Point::Specific(slot, hash.to_vec());
-        CRDTCommand::BlockStarting(point)
+    pub fn block_starting(
+        block: Option<MultiEraBlock>,
+        genesis_hash: Option<Hash<32>>,
+    ) -> CRDTCommand {
+        match (block, genesis_hash) {
+            (Some(block), None) => {
+                log::debug!("block starting");
+                let hash = block.hash();
+                let slot = block.slot();
+                let point = Point::Specific(slot, hash.to_vec());
+                CRDTCommand::BlockStarting(point)
+            }
+
+            (_, Some(genesis_hash)) => {
+                log::debug!("block starting");
+                let point = Point::Specific(0, genesis_hash.to_vec());
+                CRDTCommand::BlockStarting(point)
+            }
+
+            _ => CRDTCommand::Noop, // never called normally
+        }
     }
 
     pub fn set_add(prefix: Option<&str>, key: &str, member: String) -> CRDTCommand {
@@ -316,7 +353,11 @@ impl CRDTCommand {
         CRDTCommand::HashCounter(key, member, delta)
     }
 
-    pub fn block_finished(point: Point, block_bytes: Vec<u8>, rollback: bool) -> CRDTCommand {
+    pub fn block_finished(
+        point: Point,
+        block_bytes: Option<Vec<u8>>,
+        rollback: bool,
+    ) -> CRDTCommand {
         log::debug!("block finished {:?}", point);
         CRDTCommand::BlockFinished(point, block_bytes, rollback)
     }

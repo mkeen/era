@@ -73,6 +73,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .await
                     .unwrap();
             }
+            RawBlockPayload::RollForwardGenesis => {}
         };
 
         Ok(())

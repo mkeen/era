@@ -44,52 +44,58 @@ impl Reducer {
 
     pub async fn reduce<'b>(
         &mut self,
-        block: MultiEraBlock<'b>,
+        block: Option<MultiEraBlock<'b>>,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
     ) -> Result<(), gasket::framework::WorkerError> {
-        for tx in block.txs() {
-            if tx.is_valid() {
-                for cert in tx.certs() {
-                    if let Some(cert) = cert.as_alonzo() {
-                        match cert {
-                            alonzo::Certificate::StakeDelegation(cred, pool) => {
-                                if !rollback {
-                                    output
-                                        .lock()
-                                        .await
-                                        .send(self.registration(cred, pool).into())
-                                        .await
-                                        .or_panic()?;
-                                } else {
-                                    output
-                                        .lock()
-                                        .await
-                                        .send(self.deregistration(cred).into())
-                                        .await
-                                        .or_panic()?;
+        match block {
+            Some(block) => {
+                for tx in block.txs() {
+                    if tx.is_valid() {
+                        for cert in tx.certs() {
+                            if let Some(cert) = cert.as_alonzo() {
+                                match cert {
+                                    alonzo::Certificate::StakeDelegation(cred, pool) => {
+                                        if !rollback {
+                                            output
+                                                .lock()
+                                                .await
+                                                .send(self.registration(cred, pool).into())
+                                                .await
+                                                .or_panic()?;
+                                        } else {
+                                            output
+                                                .lock()
+                                                .await
+                                                .send(self.deregistration(cred).into())
+                                                .await
+                                                .or_panic()?;
+                                        }
+                                    }
+
+                                    alonzo::Certificate::StakeDeregistration(cred) => {
+                                        if !rollback {
+                                            output
+                                                .lock()
+                                                .await
+                                                .send(self.deregistration(cred).into())
+                                                .await
+                                                .or_panic()?;
+                                        }
+                                    }
+
+                                    _ => {}
                                 }
                             }
-
-                            alonzo::Certificate::StakeDeregistration(cred) => {
-                                if !rollback {
-                                    output
-                                        .lock()
-                                        .await
-                                        .send(self.deregistration(cred).into())
-                                        .await
-                                        .or_panic()?;
-                                }
-                            }
-
-                            _ => {}
                         }
                     }
                 }
-            }
-        }
 
-        Ok(())
+                Ok(())
+            }
+
+            None => Ok(()),
+        }
     }
 }
 

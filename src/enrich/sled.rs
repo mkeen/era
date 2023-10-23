@@ -1,9 +1,12 @@
-use std::fs::OpenOptions;
 use std::sync::Arc;
 
 use gasket::framework::*;
 
 use gasket::messaging::tokio::{InputPort, OutputPort};
+
+use pallas::codec::minicbor::Encode;
+use pallas::crypto::hash::Hash;
+use pallas::ledger::configs::byron::{genesis_utxos, GenesisUtxo};
 
 use pallas::{
     codec::minicbor,
@@ -15,9 +18,9 @@ use serde::Deserialize;
 use sled::IVec;
 use tokio::sync::Mutex;
 
-use crate::crosscut;
 use crate::pipeline::Context;
 use crate::prelude::AppliesPolicy;
+use crate::{crosscut, Error};
 use crate::{
     model::{self, BlockContext, EnrichedBlockPayload, RawBlockPayload},
     pipeline,
@@ -53,6 +56,7 @@ impl Config {
     }
 }
 
+// bool - true = genesis txs
 struct SledTxValue(u16, Vec<u8>);
 
 impl TryInto<IVec> for SledTxValue {
@@ -131,15 +135,33 @@ impl Worker {
         for tx in txs.iter() {
             for (idx, output) in tx.produces() {
                 let value: IVec = SledTxValue(tx.era() as u16, output.encode()).try_into()?;
-                let r = insert_batch.insert(format!("{}#{}", tx.hash(), idx).as_bytes(), value);
-
+                insert_batch.insert(format!("{}#{}", tx.hash(), idx).as_bytes(), value);
                 inserts.inc(1);
-
-                r
             }
         }
 
         db.apply_batch(insert_batch).map_err(crate::Error::storage)
+    }
+
+    fn insert_genesis_utxo(
+        &self,
+        db: &sled::Db,
+        idx: u64,
+        genesis_utxo: &GenesisUtxo,
+        inserts: &gasket::metrics::Counter,
+    ) -> Result<(), crate::Error> {
+        let mut insert_batch = sled::Batch::default();
+
+        let mut encoded_genesis_utxo = vec![];
+        minicbor::encode(genesis_utxo, &mut encoded_genesis_utxo).unwrap();
+
+        let value: IVec = SledTxValue(0, encoded_genesis_utxo).try_into()?;
+        inserts.inc(1);
+
+        db.insert(format!("{}#{}", genesis_utxo.0, idx).as_bytes(), value)
+            .map_err(Error::storage)?;
+
+        Ok(())
     }
 
     fn remove_produced_utxos(
@@ -378,6 +400,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                                         ctx,
                                     ))
                                     .await
+                                    .map_err(|_| WorkerError::Send)
                                     .or_panic()
                             }
                             None => Err(gasket::framework::WorkerError::Panic),
@@ -397,6 +420,35 @@ impl gasket::framework::Worker<Stage> for Worker {
                         };
 
                         out
+                    }
+
+                    model::RawBlockPayload::RollForwardGenesis => {
+                        let all = genesis_utxos(&stage.ctx.lock().await.genesis_file).clone();
+
+                        for (i, utxo) in all.iter().enumerate() {
+                            self.insert_genesis_utxo(&db, i as u64, &utxo, &stage.enrich_inserts)
+                                .map_err(crate::Error::storage)
+                                .apply_policy(&policy)
+                                .or_panic()?;
+                        }
+
+                        stage
+                            .output
+                            .send(model::EnrichedBlockPayload::roll_forward_genesis(
+                                genesis_utxos(&stage.ctx.lock().await.genesis_file),
+                                Hash::<32>::new(
+                                    hex::decode(
+                                        stage.ctx.lock().await.chain.byron_known_hash.clone(),
+                                    )
+                                    .unwrap()
+                                    .try_into()
+                                    .expect("invalid byron block hash"),
+                                ),
+                            ))
+                            .await
+                            .or_panic()?;
+
+                        Ok(())
                     }
 
                     model::RawBlockPayload::RollBack(

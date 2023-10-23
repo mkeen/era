@@ -63,35 +63,43 @@ impl Reducer {
 
     pub async fn reduce<'b>(
         &mut self,
-        block: MultiEraBlock<'b>,
+        block: Option<MultiEraBlock<'b>>,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
     ) -> Result<(), gasket::framework::WorkerError> {
-        let time_provider = crosscut::time::NaiveProvider::new(self.ctx.clone()).await;
+        match block {
+            Some(block) => {
+                let time_provider = crosscut::time::NaiveProvider::new(self.ctx.clone()).await;
 
-        for tx in block.txs().into_iter() {
-            for (_, outp) in tx.produces().iter() {
-                for asset_group in outp.non_ada_assets() {
-                    for asset in asset_group.assets() {
-                        let asset_name = hex::encode(asset.name());
-                        let policy_hex = hex::encode(asset.policy());
+                for tx in block.txs().into_iter() {
+                    for (_, outp) in tx.produces().iter() {
+                        for asset_group in outp.non_ada_assets() {
+                            for asset in asset_group.assets() {
+                                let asset_name = hex::encode(asset.name());
+                                let policy_hex = hex::encode(asset.policy());
 
-                        if let Ok(fingerprint) =
-                            asset_fingerprint([&policy_hex, asset_name.as_str()])
-                        {
-                            if !fingerprint.is_empty() {
-                                self.process_asset(
-                                    &asset.policy(),
-                                    &fingerprint,
-                                    &time_provider.slot_to_wallclock(block.slot()).to_string(),
-                                    output.clone(),
-                                )
-                                .await
-                                .or_panic()?;
+                                if let Ok(fingerprint) =
+                                    asset_fingerprint([&policy_hex, asset_name.as_str()])
+                                {
+                                    if !fingerprint.is_empty() {
+                                        self.process_asset(
+                                            &asset.policy(),
+                                            &fingerprint,
+                                            &time_provider
+                                                .slot_to_wallclock(block.slot())
+                                                .to_string(),
+                                            output.clone(),
+                                        )
+                                        .await
+                                        .or_panic()?;
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
+
+            None => {} // skip if this is a set of genesis txs
         }
 
         Ok(())

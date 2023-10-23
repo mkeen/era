@@ -227,47 +227,54 @@ impl Reducer {
 
     pub async fn reduce<'b>(
         &mut self,
-        block: MultiEraBlock<'b>,
+        block: Option<MultiEraBlock<'b>>,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
     ) -> Result<(), gasket::framework::WorkerError> {
-        let prefix = self.config.key_prefix.as_deref().unwrap_or("m");
-        let royalty_prefix = self.config.royalty_key_prefix.as_deref().unwrap_or("m.r");
+        match block {
+            Some(block) => {
+                let prefix = self.config.key_prefix.as_deref().unwrap_or("m");
+                let royalty_prefix = self.config.royalty_key_prefix.as_deref().unwrap_or("m.r");
 
-        let time_provider = crosscut::time::NaiveProvider::new(self.ctx.clone()).await;
+                let time_provider = crosscut::time::NaiveProvider::new(self.ctx.clone()).await;
 
-        for tx in block.txs() {
-            for asset_group in tx.mints() {
-                for multi_asset in asset_group.assets() {
-                    let policy_id_str = hex::encode(multi_asset.policy());
-                    if let Some(quantity) = multi_asset.mint_coin() {
-                        let asset_name_str = match String::from_utf8(multi_asset.name().to_vec()) {
-                            Ok(asset_name) => asset_name,
-                            Err(_) => hex::encode(multi_asset.name()),
-                        };
+                for tx in block.txs() {
+                    for asset_group in tx.mints() {
+                        for multi_asset in asset_group.assets() {
+                            let policy_id_str = hex::encode(multi_asset.policy());
+                            if let Some(quantity) = multi_asset.mint_coin() {
+                                let asset_name_str =
+                                    match String::from_utf8(multi_asset.name().to_vec()) {
+                                        Ok(asset_name) => asset_name,
+                                        Err(_) => hex::encode(multi_asset.name()),
+                                    };
 
-                        if !policy_id_str.is_empty() {
-                            for supported_metadata_cip in vec![CIP25_META_NFT, CIP27_META_ROYALTIES]
-                            {
-                                if let Some(policy_map) = tx
-                                    .metadata()
-                                    .find(MetadatumLabel::from(supported_metadata_cip))
-                                {
-                                    if quantity > -1 {
-                                        self.extract_and_aggregate_cip_metadata(
-                                            output.clone(),
-                                            supported_metadata_cip,
-                                            policy_map.clone(),
-                                            policy_id_str.clone(),
-                                            asset_name_str.clone(),
-                                            block.slot().clone(),
-                                            rollback,
-                                            prefix,
-                                            royalty_prefix,
-                                            time_provider.slot_to_wallclock(block.slot().clone()),
-                                        )
-                                        .await
-                                        .unwrap_or(());
+                                if !policy_id_str.is_empty() {
+                                    for supported_metadata_cip in
+                                        vec![CIP25_META_NFT, CIP27_META_ROYALTIES]
+                                    {
+                                        if let Some(policy_map) = tx
+                                            .metadata()
+                                            .find(MetadatumLabel::from(supported_metadata_cip))
+                                        {
+                                            if quantity > -1 {
+                                                self.extract_and_aggregate_cip_metadata(
+                                                    output.clone(),
+                                                    supported_metadata_cip,
+                                                    policy_map.clone(),
+                                                    policy_id_str.clone(),
+                                                    asset_name_str.clone(),
+                                                    block.slot().clone(),
+                                                    rollback,
+                                                    prefix,
+                                                    royalty_prefix,
+                                                    time_provider
+                                                        .slot_to_wallclock(block.slot().clone()),
+                                                )
+                                                .await
+                                                .unwrap_or(());
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -275,6 +282,8 @@ impl Reducer {
                     }
                 }
             }
+
+            None => {} // skip block if this is a genesis set
         }
 
         Ok(())

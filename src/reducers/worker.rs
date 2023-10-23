@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use async_trait;
+use pallas::crypto::hash::Hash;
+use pallas::ledger::configs::byron::GenesisUtxo;
 use pallas::{ledger::traverse::MultiEraBlock, network::miniprotocols::Point};
 use tokio::sync::Mutex;
 
@@ -15,53 +17,92 @@ use gasket::framework::*;
 use gasket::messaging::tokio::{connect_ports, InputPort, OutputPort};
 
 struct Config {
-    chain: crosscut::ChainWellKnownInfo,
-}
+    reducers: Vec<Reducer>,
+} // todo use this like all the other gasket items
 
 pub struct Worker {}
 
 impl Worker {
+    // todo cut down on clones here
     async fn reduce_block(
         &mut self,
-        block_raw: &Vec<u8>,
+        block_raw: Option<Vec<u8>>,
+        genesis_utxos: Option<Vec<GenesisUtxo>>,
+        genesis_hash: Option<Hash<32>>,
         rollback: bool,
-        block_ctx: &model::BlockContext,
+        block_ctx: Option<model::BlockContext>,
         last_good_block_rollback_info: Option<(Point, u64)>,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         reducers: &mut Vec<Reducer>,
         ops_count: &gasket::metrics::Counter,
         reducer_errors: &gasket::metrics::Counter,
     ) -> Result<(), WorkerError> {
-        let block_parsed = MultiEraBlock::decode(&block_raw).unwrap();
-
-        let point = match rollback {
-            true => {
-                let (last_point, _) = last_good_block_rollback_info.clone().unwrap();
-                last_point
-            }
-            false => Point::Specific(block_parsed.slot(), block_parsed.hash().to_vec()),
-        };
-
-        output
-            .lock()
-            .await
-            .send(model::CRDTCommand::block_starting(&block_parsed).into())
-            .await
-            .map_err(|_| WorkerError::Send)?;
-
-        if rollback {
-            log::warn!(
-                "rolling back {}.{}",
-                block_parsed.slot(),
-                block_parsed.hash().to_string(),
-            );
-        }
+        let block_parsed = None;
+        let mut point: Point = Point::Origin;
 
         let mut handles = Vec::new();
+
+        match (block_raw.clone(), genesis_utxos.clone(), genesis_hash) {
+            (Some(block_raw), None, None) => match MultiEraBlock::decode(&block_raw) {
+                Ok(block_parsed) => {
+                    let block_parsed = block_parsed.clone();
+
+                    point = match rollback {
+                        true => {
+                            let (last_point, _) = last_good_block_rollback_info.clone().unwrap();
+                            last_point
+                        }
+                        false => Point::Specific(block_parsed.slot(), block_parsed.hash().to_vec()),
+                    };
+
+                    output
+                        .lock()
+                        .await
+                        .send(
+                            model::CRDTCommand::block_starting(Some(block_parsed.clone()), None)
+                                .into(),
+                        )
+                        .await
+                        .map_err(|_| WorkerError::Send)?;
+
+                    if rollback {
+                        log::warn!(
+                            "rolling back {}.{}",
+                            block_parsed.slot(),
+                            block_parsed.hash().to_string(),
+                        );
+                    }
+
+                    Ok(())
+                }
+
+                Err(_) => Err(gasket::framework::WorkerError::Panic),
+            },
+
+            (None, Some(_), Some(genesis_hash)) => {
+                point = Point::Specific(0, genesis_hash.to_vec());
+
+                output
+                    .lock()
+                    .await
+                    .send(
+                        model::CRDTCommand::block_starting(None, Some(genesis_hash.clone())).into(),
+                    )
+                    .await
+                    .map_err(|_| WorkerError::Send)?;
+
+                Ok(())
+            }
+
+            _ => Err(gasket::framework::WorkerError::Panic),
+        }?;
+
         for reducer in reducers {
             handles.push(reducer.reduce_block(
                 block_parsed.clone(),
                 block_ctx.clone(),
+                genesis_utxos.clone(),
+                genesis_hash,
                 rollback.clone(),
                 output.clone(),
             ));
@@ -86,10 +127,7 @@ impl Worker {
         output
             .lock()
             .await
-            .send(
-                model::CRDTCommand::block_finished(point.clone(), block_raw.clone(), rollback)
-                    .into(),
-            )
+            .send(model::CRDTCommand::block_finished(point.clone(), block_raw, rollback).into())
             .await
             .map_err(|_| WorkerError::Send)?;
 
@@ -166,9 +204,11 @@ impl gasket::framework::Worker<Stage> for Worker {
     ) -> Result<(), WorkerError> {
         match unit {
             model::EnrichedBlockPayload::RollForward(block, ctx) => self.reduce_block(
-                block,
+                Some(block.clone()),
+                None,
+                None,
                 false,
-                &ctx,
+                Some(ctx.clone()),
                 None,
                 stage.output.clone(),
                 &mut stage.reducers,
@@ -178,10 +218,26 @@ impl gasket::framework::Worker<Stage> for Worker {
 
             model::EnrichedBlockPayload::RollBack(block, ctx, last_block_rollback_info) => self
                 .reduce_block(
-                    block,
-                    true,
-                    &ctx,
+                    Some(block.clone()),
+                    None,
+                    None,
+                    false,
+                    Some(ctx.clone()),
                     Some(last_block_rollback_info.clone()),
+                    stage.output.clone(),
+                    &mut stage.reducers,
+                    &stage.ops_count,
+                    &stage.reducer_errors,
+                ),
+
+            model::EnrichedBlockPayload::RollForwardGenesis(utxos, genesis_hash) => self
+                .reduce_block(
+                    None,
+                    Some(utxos.clone()),
+                    Some(genesis_hash.clone()),
+                    false,
+                    None,
+                    None,
                     stage.output.clone(),
                     &mut stage.reducers,
                     &stage.ops_count,

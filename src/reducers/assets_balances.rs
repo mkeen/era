@@ -2,6 +2,8 @@ use crate::model::CRDTCommand;
 use crate::pipeline::Context;
 use crate::{crosscut, model, prelude::*};
 use gasket::messaging::tokio::OutputPort;
+use pallas::crypto::hash::Hash;
+use pallas::ledger::configs::byron::GenesisUtxo;
 use pallas::ledger::traverse::MultiEraBlock;
 use pallas::ledger::traverse::{
     MultiEraAsset, MultiEraInput, MultiEraOutput, MultiEraPolicyAssets,
@@ -11,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use bech32::{ToBase32, Variant};
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
-use pallas::ledger::addresses::{Address, StakeAddress};
+use pallas::ledger::addresses::{Address, ByronAddress, StakeAddress};
 use std::collections::HashMap;
 use std::result::Result;
 use std::sync::Arc;
@@ -234,23 +236,43 @@ impl Reducer {
     async fn process_received<'a>(
         &self,
         output: Arc<Mutex<OutputPort<model::CRDTCommand>>>,
-        meo: &'a MultiEraOutput<'a>,
+        meo: Option<MultiEraOutput<'a>>,
+        genesis_utxo: Option<GenesisUtxo>,
         slot: u64,
         rollback: bool,
         timeslot: u64,
     ) -> Result<(), gasket::framework::WorkerError> {
-        let received_to_soa = self.stake_or_address_from_address(&meo.address().unwrap());
+        match (meo, genesis_utxo) {
+            (Some(meo), None) => {
+                let received_to_soa = self.stake_or_address_from_address(&meo.address().unwrap());
 
-        self.process_asset_movement(
-            output,
-            &received_to_soa,
-            meo.lovelace_amount(),
-            &meo.non_ada_assets(),
-            rollback,
-            slot,
-            timeslot,
-        )
-        .await
+                self.process_asset_movement(
+                    output,
+                    &received_to_soa,
+                    meo.lovelace_amount(),
+                    &meo.non_ada_assets(),
+                    rollback,
+                    slot,
+                    timeslot,
+                )
+                .await
+            }
+
+            (None, Some(genesis_utxo)) => {
+                self.process_asset_movement(
+                    output,
+                    &hex::encode(genesis_utxo.1.to_vec()),
+                    genesis_utxo.2,
+                    &Vec::default(),
+                    false,
+                    0,
+                    timeslot,
+                )
+                .await
+            }
+
+            _ => Err(gasket::framework::WorkerError::Panic),
+        }
     }
 
     async fn process_spent<'a>(
@@ -289,45 +311,63 @@ impl Reducer {
 
     pub async fn reduce<'b>(
         &mut self,
-        block: MultiEraBlock<'b>,
-        block_ctx: model::BlockContext,
+        block: Option<MultiEraBlock<'b>>,
+        block_ctx: Option<model::BlockContext>,
+        genesis_utxos: Option<Vec<GenesisUtxo>>,
+        genesis_hash: Option<Hash<32>>,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
     ) -> Result<(), gasket::framework::WorkerError> {
-        let slot = block.slot();
+        match (block, block_ctx, genesis_utxos, genesis_hash) {
+            (Some(block), Some(block_ctx), None, None) => {
+                let slot = block.slot();
+                let time_provider = crosscut::time::NaiveProvider::new(self.ctx.clone()).await;
+                let error_policy = self.ctx.lock().await.error_policy.clone();
 
-        let time_provider = crosscut::time::NaiveProvider::new(self.ctx.clone()).await;
-        let error_policy = self.ctx.lock().await.error_policy.clone();
+                for tx in block.txs() {
+                    for consumes in tx.consumes().iter() {
+                        self.process_spent(
+                            output.clone(),
+                            consumes,
+                            &block_ctx,
+                            slot,
+                            rollback,
+                            &error_policy,
+                            time_provider.slot_to_wallclock(slot),
+                        )
+                        .await
+                        .or_panic()?;
+                    }
 
-        for tx in block.txs() {
-            for consumes in tx.consumes().iter() {
-                self.process_spent(
-                    output.clone(),
-                    consumes,
-                    &block_ctx,
-                    slot,
-                    rollback,
-                    &error_policy,
-                    time_provider.slot_to_wallclock(slot),
-                )
-                .await
-                .or_panic()?;
+                    for (_, utxo_produced) in tx.produces().iter() {
+                        self.process_received(
+                            output.clone(),
+                            Some(utxo_produced.clone()),
+                            None,
+                            slot,
+                            rollback,
+                            time_provider.slot_to_wallclock(slot),
+                        )
+                        .await
+                        .or_panic()?;
+                    }
+                }
+
+                Ok(())
             }
 
-            for (_, utxo_produced) in tx.produces().iter() {
-                self.process_received(
-                    output.clone(),
-                    utxo_produced,
-                    slot,
-                    rollback,
-                    time_provider.slot_to_wallclock(slot),
-                )
-                .await
-                .or_panic()?;
+            (None, None, Some(genesis_utxos), Some(_)) => {
+                for utxo in genesis_utxos {
+                    self.process_received(output.clone(), None, Some(utxo), 0, false, 0)
+                        .await
+                        .or_panic()?;
+                }
+
+                Ok(())
             }
+
+            _ => Err(gasket::framework::WorkerError::Panic),
         }
-
-        Ok(())
     }
 }
 

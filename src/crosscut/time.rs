@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
+use pallas::ledger::traverse::wellknown::GenesisValues;
 use tokio::sync::Mutex;
 
 use crate::pipeline::Context;
-
-use super::ChainWellKnownInfo;
 
 #[inline]
 fn compute_linear_timestamp(
@@ -32,7 +31,7 @@ fn compute_era_epoch(era_slot: u64, era_slot_length: u64, era_epoch_length: u64)
 /// slot length from that point forward.
 #[derive(Clone)]
 pub(crate) struct NaiveProvider {
-    config: ChainWellKnownInfo,
+    config: GenesisValues,
 }
 
 impl NaiveProvider {

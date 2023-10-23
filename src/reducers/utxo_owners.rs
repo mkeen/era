@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use gasket::framework::AsWorkError;
+use gasket::framework::{AsWorkError, WorkerError};
 use gasket::messaging::tokio::OutputPort;
 use pallas::codec::utils::CborWrap;
 use pallas::crypto::hash::Hash;
+use pallas::ledger::configs::byron::GenesisUtxo;
 use pallas::ledger::primitives::babbage::{PlutusData, PseudoDatumOption};
 use pallas::ledger::primitives::Fragment;
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraTx};
@@ -109,8 +110,10 @@ impl Reducer {
 
     pub async fn reduce<'b>(
         &mut self,
-        block: MultiEraBlock<'b>,
-        block_ctx: model::BlockContext,
+        block: Option<MultiEraBlock<'b>>,
+        block_ctx: Option<model::BlockContext>,
+        genesis_utxos: Option<Vec<GenesisUtxo>>,
+        genesis_hash: Option<Hash<32>>,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
     ) -> Result<(), gasket::framework::WorkerError> {
@@ -120,44 +123,78 @@ impl Reducer {
 
         let prefix = &self.config.key_prefix.clone().unwrap_or("tx".to_string());
 
-        for tx in block.txs() {
-            for consumed in tx.consumes() {
-                let output_ref = consumed.output_ref();
+        match (block, block_ctx, genesis_utxos, genesis_hash) {
+            (Some(block), Some(block_ctx), None, None) => {
+                for tx in block.txs() {
+                    for consumed in tx.consumes() {
+                        let output_ref = consumed.output_ref();
 
-                if let Ok(utxo) = block_ctx.find_utxo(&output_ref) {
-                    if let Some((key, value)) = self.get_key_value(
-                        &utxo,
-                        &tx,
-                        &(output_ref.hash().clone(), output_ref.index().clone()),
-                    ) {
-                        output
-                            .lock()
-                            .await
-                            .send(
-                                model::CRDTCommand::set_remove(Some(prefix), &key.as_str(), value)
-                                    .into(),
-                            )
-                            .await
-                            .unwrap();
+                        if let Ok(utxo) = block_ctx.find_utxo(&output_ref) {
+                            if let Some((key, value)) = self.get_key_value(
+                                &utxo,
+                                &tx,
+                                &(output_ref.hash().clone(), output_ref.index().clone()),
+                            ) {
+                                output
+                                    .lock()
+                                    .await
+                                    .send(
+                                        model::CRDTCommand::set_remove(
+                                            Some(prefix),
+                                            &key.as_str(),
+                                            value,
+                                        )
+                                        .into(),
+                                    )
+                                    .await
+                                    .map_err(|e| WorkerError::Send)
+                                    .or_panic()?;
+                            }
+                        }
+                    }
+
+                    for (index, produced) in tx.produces() {
+                        let output_ref = (tx.hash().clone(), index as u64);
+                        if let Some((key, value)) = self.get_key_value(&produced, &tx, &output_ref)
+                        {
+                            log::warn!("i see a tx {:?}", prefix);
+                            output
+                                .lock()
+                                .await
+                                .send(model::CRDTCommand::set_add(Some(prefix), &key, value).into())
+                                .await
+                                .map_err(|e| WorkerError::Send)
+                                .or_panic()?;
+                        }
                     }
                 }
+
+                Ok(())
             }
 
-            for (index, produced) in tx.produces() {
-                let output_ref = (tx.hash().clone(), index as u64);
-                if let Some((key, value)) = self.get_key_value(&produced, &tx, &output_ref) {
-                    log::warn!("i see a tx {:?}", prefix);
+            (None, None, Some(genesis_utxos), Some(genesis_hash)) => {
+                for (i, utxo) in genesis_utxos.iter().enumerate() {
                     output
                         .lock()
                         .await
-                        .send(model::CRDTCommand::set_add(Some(prefix), &key, value).into())
+                        .send(
+                            model::CRDTCommand::set_add(
+                                Some(prefix),
+                                format!("{}#{}", hex::encode(genesis_hash.to_vec()), i).as_str(),
+                                "This is unused".to_string(),
+                            )
+                            .into(),
+                        )
                         .await
-                        .unwrap();
+                        .map_err(|e| WorkerError::Send)
+                        .or_panic()?;
                 }
-            }
-        }
 
-        Ok(())
+                Ok(())
+            }
+
+            _ => Err(WorkerError::Panic),
+        }
     }
 }
 

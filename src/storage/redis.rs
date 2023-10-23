@@ -314,10 +314,15 @@ impl gasket::framework::Worker<Stage> for Worker {
             model::CRDTCommand::BlockFinished(point, block_bytes, rollback) => {
                 let cursor_str = crosscut::PointArg::from(point.clone()).to_string();
 
-                let block = MultiEraBlock::decode(&block_bytes);
-                stage
-                    .chain_era
-                    .set(string_to_i64(block.unwrap().era().to_string()));
+                match block_bytes.clone() {
+                    Some(block_bytes) => {
+                        let block = MultiEraBlock::decode(&block_bytes).unwrap();
+                        stage.chain_era.set(string_to_i64(block.era().to_string()));
+                    }
+                    None => {
+                        stage.chain_era.set(string_to_i64("Byron".to_string()));
+                    }
+                }
 
                 self.connection
                     .as_mut()
@@ -330,18 +335,29 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .query(self.connection.as_mut().unwrap())
                     .or_restart()?;
 
-                stage
-                    .ctx
-                    .lock()
-                    .await
-                    .block_buffer
-                    .insert_block(&point, &block_bytes);
+                match block_bytes.clone() {
+                    Some(block_bytes) => {
+                        let block = MultiEraBlock::decode(&block_bytes).unwrap();
+                        stage
+                            .ctx
+                            .lock()
+                            .await
+                            .block_buffer
+                            .insert_block(&point, &block_bytes);
+
+                        if *rollback {
+                            stage.ctx.lock().await.block_buffer.remove_block(&point);
+                            // todo make these return a Result so we can use error handling
+                        }
+
+                        stage.chain_era.set(string_to_i64(block.era().to_string()));
+                    }
+                    None => {
+                        stage.chain_era.set(string_to_i64("Byron".to_string()));
+                    }
+                }
 
                 stage.last_block.set(point.slot_or_default() as i64);
-
-                if *rollback {
-                    stage.ctx.lock().await.block_buffer.remove_block(&point); // todo make these return a Result so we can use error handling
-                }
 
                 log::info!(
                     "new cursor saved to redis {} {}",

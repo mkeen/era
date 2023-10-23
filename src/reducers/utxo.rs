@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bech32::{ToBase32, Variant};
@@ -5,6 +6,7 @@ use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use pallas::crypto::hash::Hash;
 use pallas::ledger::addresses::{Address, StakeAddress};
+use pallas::ledger::configs::byron::GenesisUtxo;
 use pallas::ledger::traverse::{MultiEraAsset, MultiEraOutput};
 use pallas::ledger::traverse::{MultiEraBlock, OutputRef};
 use serde::{Deserialize, Serialize};
@@ -352,32 +354,76 @@ impl Reducer {
 
     pub async fn reduce<'b>(
         &mut self,
-        block: MultiEraBlock<'b>,
-        block_ctx: model::BlockContext,
+        block: Option<MultiEraBlock<'b>>,
+        block_ctx: Option<model::BlockContext>,
+        genesis_utxos: Option<Vec<GenesisUtxo>>,
+        genesis_hash: Option<Hash<32>>,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
     ) -> Result<(), gasket::framework::WorkerError> {
         let policy = self.ctx.lock().await.error_policy.clone();
 
-        for tx in block.txs() {
-            for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
-                self.process_consumed_txo(&block_ctx, &consumed, output.clone(), rollback, &policy)
-                    .await?
+        match (block, block_ctx, genesis_utxos, genesis_hash) {
+            (Some(block), Some(block_ctx), None, None) => {
+                for tx in block.txs() {
+                    if tx.is_valid() {
+                        for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
+                            self.process_consumed_txo(
+                                &block_ctx,
+                                &consumed,
+                                output.clone(),
+                                rollback,
+                                &policy,
+                            )
+                            .await?;
+                        }
+
+                        for (idx, produced) in tx.produces().iter() {
+                            self.process_produced_txo(
+                                &tx.hash(),
+                                &produced,
+                                idx.clone(),
+                                output.clone(),
+                                rollback,
+                            )
+                            .await?;
+                        }
+                    }
+                }
+
+                Ok(())
             }
 
-            for (idx, produced) in tx.produces().iter() {
-                self.process_produced_txo(
-                    &tx.hash(),
-                    &produced,
-                    idx.clone(),
-                    output.clone(),
-                    rollback,
-                )
-                .await?
+            (None, None, Some(genesis_utxos), Some(genesis_hash)) => {
+                let mut address_lovelace_agg: HashMap<String, u64> = HashMap::new();
+
+                for (i, utxo) in genesis_utxos.iter().enumerate() {
+                    *address_lovelace_agg
+                        .entry(hex::encode(utxo.1.to_vec()))
+                        .or_insert(0) += utxo.2;
+
+                    let address = hex::encode(utxo.1.to_vec());
+                    let key = format!("{}#{}", hex::encode(utxo.0), i);
+
+                    self.tx_state(output.clone(), &address, &key, true).await?;
+
+                    self.coin_state(
+                        output.clone(),
+                        &address,
+                        &key,
+                        &utxo.2.to_string(),
+                        !rollback,
+                    )
+                    .await?;
+                }
+
+                //for (address, lovelace) in &address_lovelace_agg {} // todo determine if we can merge this with utxo_owners or whatever it is for wallet management.. stubbed for now
+
+                Ok(())
             }
+
+            _ => Err(gasket::framework::WorkerError::Panic),
         }
-
-        Ok(())
     }
 }
 

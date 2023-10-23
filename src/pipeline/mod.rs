@@ -10,6 +10,7 @@ use gasket::{
     retries,
     runtime::{spawn_stage, Policy, Tether},
 };
+use pallas::ledger::{configs::byron::GenesisFile, traverse::wellknown::GenesisValues};
 use tokio::sync::Mutex;
 
 #[derive(Stage)]
@@ -23,7 +24,6 @@ pub struct Stage {
     pub args_console: Option<console::Mode>,
 }
 
-// Way too many clones down in here... need to tighten up
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Pipeline {
     async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
@@ -156,11 +156,11 @@ impl Pipeline {
     }
 }
 
-#[derive(Clone)]
 pub struct Context {
-    pub chain: crosscut::ChainWellKnownInfo,
+    pub chain: GenesisValues,
     pub intersect: crosscut::IntersectConfig,
     pub finalize: Option<crosscut::FinalizeConfig>,
     pub block_buffer: crosscut::historic::BufferBlocks,
     pub error_policy: crosscut::policies::RuntimePolicy,
+    pub genesis_file: GenesisFile,
 }
