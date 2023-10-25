@@ -156,6 +156,9 @@ impl Worker {
         minicbor::encode(genesis_utxo, &mut encoded_genesis_utxo).unwrap();
 
         let value: IVec = SledTxValue(0, encoded_genesis_utxo).try_into()?;
+
+        log::warn!("{:?}", genesis_utxo);
+
         inserts.inc(1);
 
         db.insert(format!("{}#{}", genesis_utxo.0, "0").as_bytes(), value)
@@ -190,8 +193,6 @@ impl Worker {
         block_number: u64,
         txs: &[MultiEraTx],
     ) -> Result<(BlockContext, u64, u64), crate::Error> {
-        log::warn!("getting thing for {:?}", block_number);
-
         let mut ctx = BlockContext::default();
 
         let mut match_count: u64 = 0;
@@ -215,6 +216,8 @@ impl Worker {
                 ctx.import_ref_output(&key, era, cbor);
                 match_count += 1;
             } else {
+                log::warn!("DEST: {:?}", required);
+
                 mismatch_count += 1;
             }
         }
