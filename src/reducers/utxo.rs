@@ -365,23 +365,21 @@ impl Reducer {
 
         match (block, genesis_utxos, genesis_hash) {
             (Some(block), _, _) => {
+                let block_ctx = &block_ctx;
+
                 for tx in block.txs() {
                     if tx.is_valid() {
-                        match block_ctx.clone() {
-                            Some(block_ctx) => {
-                                for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
-                                    self.process_consumed_txo(
-                                        &block_ctx,
-                                        &consumed,
-                                        output.clone(),
-                                        rollback,
-                                        &policy,
-                                    )
-                                    .await?;
-                                }
+                        if let Some(block_ctx) = block_ctx {
+                            for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
+                                self.process_consumed_txo(
+                                    &block_ctx,
+                                    &consumed,
+                                    output.clone(),
+                                    rollback,
+                                    &policy,
+                                )
+                                .await?;
                             }
-
-                            None => {}
                         }
 
                         for (idx, produced) in tx.produces().iter() {
