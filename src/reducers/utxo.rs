@@ -363,21 +363,25 @@ impl Reducer {
     ) -> Result<(), gasket::framework::WorkerError> {
         let policy = self.ctx.lock().await.error_policy.clone();
 
-        log::warn!("pwefwefoopwefwwef {:?}", block_ctx);
-
-        match (block, block_ctx, genesis_utxos, genesis_hash) {
-            (Some(block), Some(block_ctx), _, _) => {
+        match (block, genesis_utxos, genesis_hash) {
+            (Some(block), _, _) => {
                 for tx in block.txs() {
                     if tx.is_valid() {
-                        for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
-                            self.process_consumed_txo(
-                                &block_ctx,
-                                &consumed,
-                                output.clone(),
-                                rollback,
-                                &policy,
-                            )
-                            .await?;
+                        match block_ctx.clone() {
+                            Some(block_ctx) => {
+                                for consumed in tx.consumes().iter().map(|i| i.output_ref()) {
+                                    self.process_consumed_txo(
+                                        &block_ctx,
+                                        &consumed,
+                                        output.clone(),
+                                        rollback,
+                                        &policy,
+                                    )
+                                    .await?;
+                                }
+                            }
+
+                            None => {}
                         }
 
                         for (idx, produced) in tx.produces().iter() {
@@ -396,9 +400,8 @@ impl Reducer {
                 Ok(())
             }
 
-            (None, None, Some(genesis_utxos), Some(_)) => {
+            (_, Some(genesis_utxos), _) => {
                 // let mut address_lovelace_agg: HashMap<String, u64> = HashMap::new();
-                log::warn!("genesissss");
                 for utxo in genesis_utxos {
                     // *address_lovelace_agg
                     //     .entry(hex::encode(utxo.1.to_vec()))

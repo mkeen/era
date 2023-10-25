@@ -26,7 +26,7 @@ impl Worker {
     // todo cut down on clones here
     async fn reduce_block(
         &mut self,
-        block_raw: Option<Vec<u8>>,
+        block_raw: Vec<u8>,
         genesis_utxos: Option<Vec<GenesisUtxo>>,
         byron_genesis_hash: Option<Hash<32>>,
         rollback: bool,
@@ -37,47 +37,79 @@ impl Worker {
         ops_count: &gasket::metrics::Counter,
         reducer_errors: &gasket::metrics::Counter,
     ) -> Result<(), WorkerError> {
-        let block_parsed = None;
         let mut point: Point = Point::Origin;
 
         let mut handles = Vec::new();
 
         match (
-            block_raw.clone(),
-            byron_genesis_hash.clone(),
-            genesis_utxos.clone(),
+            !block_raw.is_empty(),
+            byron_genesis_hash,
+            genesis_utxos.to_owned(),
         ) {
-            (Some(block_raw), None, None) => match MultiEraBlock::decode(&block_raw) {
-                Ok(block_parsed) => {
-                    let block_parsed = block_parsed.clone();
+            (true, None, None) => {
+                match MultiEraBlock::decode(&block_raw) {
+                    Ok(block_parsed) => {
+                        point = match rollback {
+                            true => {
+                                let (last_point, _) =
+                                    last_good_block_rollback_info.clone().unwrap();
+                                last_point
+                            }
+                            false => {
+                                Point::Specific(block_parsed.slot(), block_parsed.hash().to_vec())
+                            }
+                        };
 
-                    point = match rollback {
-                        true => {
-                            let (last_point, _) = last_good_block_rollback_info.clone().unwrap();
-                            last_point
-                        }
-                        false => Point::Specific(block_parsed.slot(), block_parsed.hash().to_vec()),
-                    };
-
-                    log::warn!("i have been called to reduce {}", block_parsed.slot());
-
-                    output
-                        .lock()
-                        .await
-                        .send(
-                            model::CRDTCommand::block_starting(Some(block_parsed.clone()), None)
+                        output
+                            .lock()
+                            .await
+                            .send(
+                                model::CRDTCommand::block_starting(
+                                    Some(block_parsed.clone()),
+                                    None,
+                                )
                                 .into(),
-                        )
-                        .await
-                        .map_err(|_| WorkerError::Send)?;
+                            )
+                            .await
+                            .map_err(|_| WorkerError::Send)?;
 
-                    Ok(())
+                        for reducer in reducers {
+                            handles.push(reducer.reduce_block(
+                                Some(block_parsed.clone()),
+                                block_ctx.clone(),
+                                genesis_utxos.clone(),
+                                byron_genesis_hash.clone(),
+                                rollback.clone(),
+                                output.clone(),
+                            ));
+                        }
+
+                        let results = futures::future::join_all(handles).await;
+
+                        let mut n = 0;
+
+                        for res in results {
+                            match res {
+                                Ok(_) => {
+                                    n += 1;
+                                    ops_count.inc(1);
+                                }
+                                Err(e) => {
+                                    log::warn!("reducer error! {:?} {}", e, n); // todo panic here and interrupt
+                                    reducer_errors.inc(1);
+                                    n += 1;
+                                }
+                            };
+                        }
+
+                        Ok(())
+                    }
+
+                    Err(_) => Err(gasket::framework::WorkerError::Panic),
                 }
+            }
 
-                Err(_) => Err(gasket::framework::WorkerError::Panic),
-            },
-
-            (_, Some(byron_genesis_hash), Some(_)) => {
+            (false, Some(byron_genesis_hash), Some(_)) => {
                 point = Point::Specific(0, byron_genesis_hash.to_vec());
                 log::warn!("i have been called to reduce 0,0");
 
@@ -91,56 +123,57 @@ impl Worker {
                     .await
                     .map_err(|_| WorkerError::Send)?;
 
+                for reducer in reducers {
+                    handles.push(reducer.reduce_block(
+                        None,
+                        None,
+                        genesis_utxos.clone(),
+                        Some(byron_genesis_hash.clone()),
+                        rollback.clone(),
+                        output.clone(),
+                    ));
+                }
+
+                let results = futures::future::join_all(handles).await;
+
+                let mut n = 0;
+
+                for res in results {
+                    match res {
+                        Ok(_) => {
+                            n += 1;
+                            ops_count.inc(1);
+                        }
+                        Err(e) => {
+                            log::warn!("reducer error! {:?} {}", e, n); // todo panic here and interrupt
+                            reducer_errors.inc(1);
+                            n += 1;
+                        }
+                    };
+                }
+
                 Ok(())
             }
 
             _ => Err(gasket::framework::WorkerError::Panic),
         }?;
 
-        for reducer in reducers {
-            handles.push(reducer.reduce_block(
-                block_parsed.clone(),
-                block_ctx.clone(),
-                genesis_utxos.clone(),
-                byron_genesis_hash.clone(),
-                rollback.clone(),
-                output.clone(),
-            ));
-        }
-
-        let results = futures::future::join_all(handles).await;
-
-        let mut errors = false;
-
-        let mut n = 0;
-
-        for res in results {
-            match res {
-                Ok(_) => {
-                    ops_count.inc(1);
-                }
-                Err(e) => {
-                    errors = true;
-                    log::warn!("reducer error! {:?} {}", e, n);
-                    reducer_errors.inc(1);
-                    n += 1;
-                }
-            };
-        }
-
         output
             .lock()
             .await
-            .send(model::CRDTCommand::block_finished(point.clone(), block_raw, rollback).into())
+            .send(
+                model::CRDTCommand::block_finished(
+                    point.clone(),
+                    match block_raw.is_empty() {
+                        true => None,
+                        false => Some(block_raw.clone()),
+                    },
+                    rollback,
+                )
+                .into(),
+            )
             .await
-            .map_err(|_| WorkerError::Send)?;
-
-        log::warn!("i have finished reducing {:?}", point.clone());
-
-        match errors {
-            true => Err(WorkerError::Panic),
-            false => Ok(()),
-        }
+            .map_err(|_| WorkerError::Send)
     }
 }
 
@@ -210,7 +243,7 @@ impl gasket::framework::Worker<Stage> for Worker {
     ) -> Result<(), WorkerError> {
         match unit {
             model::EnrichedBlockPayload::RollForward(block, ctx) => self.reduce_block(
-                Some(block.clone()),
+                block.clone(),
                 None,
                 None,
                 false,
@@ -224,7 +257,7 @@ impl gasket::framework::Worker<Stage> for Worker {
 
             model::EnrichedBlockPayload::RollBack(block, ctx, last_block_rollback_info) => self
                 .reduce_block(
-                    Some(block.clone()),
+                    block.clone(),
                     None,
                     None,
                     false,
@@ -237,7 +270,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                 ),
 
             model::EnrichedBlockPayload::RollForwardGenesis(utxos) => self.reduce_block(
-                None,
+                vec![],
                 Some(utxos.clone()),
                 Some(Hash::<32>::new(
                     hex::decode(stage.ctx.lock().await.chain.byron_known_hash.clone())

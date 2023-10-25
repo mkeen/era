@@ -48,6 +48,7 @@ impl Config {
             enrich_matches: Default::default(),
             enrich_mismatches: Default::default(),
             enrich_blocks: Default::default(),
+            enrich_cancelled_empty_tx: Default::default(),
             ctx,
         }
     }
@@ -82,12 +83,16 @@ fn fetch_referenced_utxo<'a>(
     db: &sled::Db,
     utxo_ref: &OutputRef,
 ) -> Result<Option<(OutputRef, Era, Vec<u8>)>, crate::Error> {
+    log::warn!("trying to find {}", utxo_ref.to_string());
+
     if let Some(ivec) = db
         .get(utxo_ref.to_string().as_bytes())
         .map_err(crate::Error::storage)?
     {
         let SledTxValue(era, cbor) = ivec.try_into().map_err(crate::Error::storage)?;
         let era: Era = era.try_into().map_err(crate::Error::storage)?;
+        log::warn!("found {}", utxo_ref.to_string());
+
         Ok(Some((utxo_ref.clone(), era, cbor)))
     } else {
         Ok(None)
@@ -185,6 +190,8 @@ impl Worker {
         block_number: u64,
         txs: &[MultiEraTx],
     ) -> Result<(BlockContext, u64, u64), crate::Error> {
+        log::warn!("getting thing for {:?}", block_number);
+
         let mut ctx = BlockContext::default();
 
         let mut match_count: u64 = 0;
@@ -320,6 +327,8 @@ pub struct Stage {
     pub enrich_matches: gasket::metrics::Counter,
     #[metric]
     pub enrich_mismatches: gasket::metrics::Counter,
+    #[metric]
+    pub enrich_cancelled_empty_tx: gasket::metrics::Counter,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -362,7 +371,7 @@ impl gasket::framework::Worker<Stage> for Worker {
             Ok(db_refs) => match db_refs {
                 Some((db, consumed_ring)) => match unit {
                     model::RawBlockPayload::RollForwardGenesis => {
-                        log::warn!("genesis provided, working it");
+                        log::warn!("rolling forward genesis provided, working it");
 
                         let all = genesis_utxos(&stage.ctx.lock().await.genesis_file).clone();
 
@@ -385,8 +394,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                     }
 
                     model::RawBlockPayload::RollForward(cbor) => {
-                        log::warn!("rolling forward");
-
                         let block = MultiEraBlock::decode(&cbor)
                             .map_err(crate::Error::cbor)
                             .apply_policy(&policy)
@@ -395,6 +402,11 @@ impl gasket::framework::Worker<Stage> for Worker {
                         let block = block.unwrap();
 
                         let txs = block.txs();
+
+                        if txs.is_empty() {
+                            stage.enrich_cancelled_empty_tx.inc(1);
+                            return Ok(());
+                        }
 
                         match self
                             .par_fetch_referenced_utxos(db, block.number(), &txs)
@@ -441,6 +453,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                         cbor,
                         (last_known_point, last_known_block_number),
                     ) => {
+                        log::warn!("rolling back");
+
                         let block = MultiEraBlock::decode(&cbor);
 
                         if let Ok(block) = block {

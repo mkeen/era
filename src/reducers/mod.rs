@@ -85,7 +85,7 @@ impl Reducer {
                     genesis_utxos,
                     genesis_hash,
                     rollback,
-                    output,
+                    output.clone(),
                 )
                 .await
             }
@@ -96,7 +96,7 @@ impl Reducer {
                     genesis_utxos,
                     genesis_hash,
                     rollback,
-                    output,
+                    output.clone(),
                 )
                 .await
             }

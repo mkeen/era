@@ -30,6 +30,7 @@ struct TuiConsole {
     enrich_matches: indicatif::ProgressBar,
     enrich_mismatches: indicatif::ProgressBar,
     enrich_blocks: indicatif::ProgressBar,
+    enrich_skipped_empty: indicatif::ProgressBar,
     historic_blocks: indicatif::ProgressBar,
     historic_blocks_removed: indicatif::ProgressBar,
     reducer_errors: indicatif::ProgressBar,
@@ -86,6 +87,7 @@ impl TuiConsole {
             enrich_matches: Self::build_counter_spinner("enrich matches", &container),
             enrich_mismatches: Self::build_counter_spinner("enrich mismatches", &container),
             enrich_blocks: Self::build_counter_spinner("enrich blocks", &container),
+            enrich_skipped_empty: Self::build_counter_spinner("enrich no tx", &container),
             reducer_ops_count: Self::build_counter_spinner("reducer ops", &container),
             reducer_errors: Self::build_counter_spinner("reducer errors", &container),
             storage_ops_count: Self::build_counter_spinner("storage ops", &container),
@@ -141,6 +143,10 @@ impl TuiConsole {
                             (_, "enrich_inserts", Reading::Count(x)) => {
                                 self.enrich_inserts.set_position(x);
                                 self.enrich_inserts.set_message(state);
+                            }
+                            (_, "enrich_cancelled_empty_tx", Reading::Count(x)) => {
+                                self.enrich_skipped_empty.set_position(x);
+                                self.enrich_skipped_empty.set_message(state);
                             }
                             (_, "enrich_removes", Reading::Count(x)) => {
                                 self.enrich_removes.set_position(x);
