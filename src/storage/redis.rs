@@ -339,7 +339,7 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                 match (block_bytes, parsed_block) {
                     (Some(block_bytes), Some(parsed_block)) => {
-                        stage.last_block.set(point.slot_or_default() as i64);
+                        stage.last_block.set(parsed_block.number() as i64);
 
                         stage
                             .chain_era
