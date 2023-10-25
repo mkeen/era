@@ -216,7 +216,7 @@ impl Worker {
                 ctx.import_ref_output(&key, era, cbor);
                 match_count += 1;
             } else {
-                log::warn!("DEST: {:?} {}", required, mismatch_count);
+                log::warn!("DEST: {:?} {} {:?}", required, mismatch_count, m);
 
                 mismatch_count += 1;
             }
