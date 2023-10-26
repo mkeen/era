@@ -755,6 +755,8 @@ dependencies = [
  "net2",
  "openssl",
  "pallas",
+ "pallas-addresses",
+ "pallas-primitives",
  "prometheus_exporter",
  "rayon",
  "redis",

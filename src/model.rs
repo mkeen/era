@@ -5,10 +5,14 @@ use std::convert::Into;
 use pallas::codec::minicbor::{self, Decode, Encode};
 use pallas::crypto::hash::Hash;
 use pallas::ledger::configs::byron::GenesisUtxo;
+use pallas::ledger::traverse::MultiEraPolicyAssets;
 use pallas::{
     ledger::traverse::{Era, MultiEraBlock, MultiEraOutput, MultiEraTx, OutputRef},
     network::miniprotocols::Point,
 };
+
+use pallas_addresses::{Address, Error as AddressError};
+use pallas_primitives::babbage::MintedDatumOption;
 
 use crate::prelude::*;
 
@@ -42,18 +46,60 @@ pub struct BlockContext {
     pub block_number: u64,
 }
 
+#[derive(Clone, Debug)]
+pub enum BlockOrigination<'b> {
+    Chain(MultiEraOutput<'b>),
+    Genesis(GenesisUtxo),
+}
+
+impl<'b> BlockOrigination<'b> {
+    pub fn address(&self) -> Result<Address, AddressError> {
+        match self {
+            BlockOrigination::Chain(output) => output.address(),
+            BlockOrigination::Genesis(genesis) => Ok(Address::Byron(genesis.1.clone())),
+        }
+    }
+
+    pub fn lovelace_amount(&self) -> u64 {
+        match self {
+            BlockOrigination::Chain(output) => output.lovelace_amount(),
+            BlockOrigination::Genesis(genesis) => genesis.2,
+        }
+    }
+
+    pub fn non_ada_assets(&'b self) -> Vec<MultiEraPolicyAssets<'b>> {
+        match self {
+            BlockOrigination::Chain(output) => output.non_ada_assets(),
+            BlockOrigination::Genesis(_) => vec![],
+        }
+    }
+
+    pub fn datum(&self) -> Option<MintedDatumOption> {
+        match self {
+            BlockOrigination::Chain(output) => output.datum(),
+            BlockOrigination::Genesis(_) => None,
+        }
+    }
+}
+
 impl BlockContext {
     pub fn import_ref_output(&mut self, key: &OutputRef, era: Era, cbor: Vec<u8>) {
         self.utxos.insert(key.to_string(), (era, cbor));
     }
 
-    pub fn find_utxo(&self, key: &OutputRef) -> Result<MultiEraOutput, Error> {
+    pub fn find_utxo(&self, key: &OutputRef) -> Result<BlockOrigination, Error> {
         let (era, cbor) = self
             .utxos
             .get(&key.to_string())
             .ok_or_else(|| Error::missing_utxo(key))?;
 
-        MultiEraOutput::decode(*era, cbor).map_err(crate::Error::cbor)
+        match MultiEraOutput::decode(*era, cbor) {
+            Ok(on_chain_output) => Ok(BlockOrigination::Chain(on_chain_output)),
+            Err(_e) => match minicbor::decode(cbor) {
+                Ok(genesis_block_utxo) => Ok(BlockOrigination::Genesis(genesis_block_utxo)),
+                Err(e) => Err(Error::missing_utxo(e)),
+            },
+        }
     }
 
     pub fn find_genesis_utxo(&self, key: &OutputRef) -> Result<GenesisUtxo, Error> {

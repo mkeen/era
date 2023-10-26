@@ -11,10 +11,11 @@ use pallas::ledger::traverse::{MultiEraAsset, MultiEraOutput};
 use pallas::ledger::traverse::{MultiEraBlock, OutputRef};
 use serde::{Deserialize, Serialize};
 
+use gasket::framework::WorkerError;
 use gasket::messaging::tokio::OutputPort;
 use tokio::sync::Mutex;
 
-use crate::model::CRDTCommand;
+use crate::model::{BlockOrigination, CRDTCommand};
 use crate::pipeline::Context;
 use crate::{crosscut, model, prelude::*};
 
@@ -81,7 +82,7 @@ impl Reducer {
         soa: &str,
         tx_str: &str,
         should_exist: bool,
-    ) -> Result<(), gasket::framework::WorkerError> {
+    ) -> Result<(), Error> {
         output
             .lock()
             .await
@@ -99,7 +100,7 @@ impl Reducer {
                 ),
             }))
             .await
-            .or_panic()
+            .map_err(|_| Error::GasketError(WorkerError::Send))
     }
 
     async fn coin_state(
@@ -109,7 +110,7 @@ impl Reducer {
         tx_str: &str,
         lovelace_amt: &str,
         should_exist: bool,
-    ) -> Result<(), gasket::framework::WorkerError> {
+    ) -> Result<(), Error> {
         output
             .lock()
             .await
@@ -127,7 +128,7 @@ impl Reducer {
                 ),
             }))
             .await
-            .or_panic()
+            .map_err(|_| Error::GasketError(WorkerError::Send))
     }
 
     async fn token_state(
@@ -139,7 +140,7 @@ impl Reducer {
         fingerprint: &str,
         quantity: &str,
         should_exist: bool,
-    ) -> Result<(), gasket::framework::WorkerError> {
+    ) -> Result<(), Error> {
         output
             .lock()
             .await
@@ -157,7 +158,7 @@ impl Reducer {
                 ),
             }))
             .await
-            .or_panic()
+            .map_err(|_| Error::GasketError(WorkerError::Send))
     }
 
     async fn datum_state<'b>(
@@ -165,9 +166,9 @@ impl Reducer {
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         address: &str,
         tx_str: &str,
-        utxo: &'b MultiEraOutput<'b>,
+        utxo: BlockOrigination<'b>,
         should_exist: bool,
-    ) -> Result<(), gasket::framework::WorkerError> {
+    ) -> Result<(), Error> {
         match utxo.datum() {
             Some(datum) => match datum {
                 pallas::ledger::primitives::babbage::PseudoDatumOption::Data(datum) => {
@@ -189,15 +190,13 @@ impl Reducer {
                             ),
                         }))
                         .await
-                        .or_panic()?;
+                        .map_err(|_| Error::GasketError(WorkerError::Send))
                 }
 
-                _ => {}
+                _ => Ok(()),
             },
-            None => {}
+            None => Ok(()),
         }
-
-        Ok(())
     }
 
     async fn process_consumed_txo(
@@ -207,18 +206,17 @@ impl Reducer {
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         rollback: bool,
         error_policy: &crosscut::policies::RuntimePolicy,
-    ) -> Result<(), gasket::framework::WorkerError> {
-        let utxo = ctx.find_utxo(input).apply_policy(error_policy).or_panic()?;
-
-        let utxo = match utxo {
-            Some(x) => x,
-            None => return Ok(()),
-        };
+    ) -> Result<(), Error> {
+        let utxo = ctx.find_utxo(input)?;
 
         let address = utxo.address().map(|x| x.to_string()).unwrap();
 
-        if let Ok(raw_address) = &utxo.address() {
-            let soa = self.stake_or_address_from_address(raw_address);
+        let lovelace_amt = utxo.lovelace_amount();
+        let cloned_utxo = utxo.clone();
+        let non_ada_assets = cloned_utxo.non_ada_assets();
+
+        if let Ok(raw_address) = utxo.address() {
+            let soa = self.stake_or_address_from_address(&raw_address);
             self.tx_state(
                 output.clone(),
                 soa.as_str(),
@@ -231,7 +229,7 @@ impl Reducer {
                 output.clone(),
                 soa.as_str(),
                 &format!("{}#{}", input.hash(), input.index()),
-                &utxo,
+                utxo,
                 rollback,
             )
             .await?;
@@ -243,14 +241,14 @@ impl Reducer {
                     .unwrap_or(raw_address.to_string())
                     .as_str(),
                 &format!("{}#{}", input.hash(), input.index()),
-                utxo.lovelace_amount().to_string().as_str(),
+                lovelace_amt.to_string().as_str(),
                 rollback,
             )
             .await?;
         }
 
         // Spend Native Tokens
-        for asset_group in utxo.non_ada_assets() {
+        for asset_group in non_ada_assets {
             for asset in asset_group.assets() {
                 if let MultiEraAsset::AlonzoCompatibleOutput(policy_id, asset_name, quantity) =
                     asset.clone()
@@ -271,8 +269,7 @@ impl Reducer {
                                 quantity.to_string().as_str(),
                                 rollback,
                             )
-                            .await
-                            .or_panic()?;
+                            .await?;
                         }
                     }
                 };
@@ -285,12 +282,12 @@ impl Reducer {
     async fn process_produced_txo<'b>(
         &mut self,
         tx_hash: &Hash<32>,
-        tx_output: &'b MultiEraOutput<'b>,
+        tx_output: &'b BlockOrigination<'b>,
         output_idx: usize,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         rollback: bool,
-    ) -> Result<(), gasket::framework::WorkerError> {
-        if let Ok(raw_address) = &tx_output.address() {
+    ) -> Result<(), Error> {
+        if let Ok(raw_address) = tx_output.address() {
             let tx_address = raw_address.to_bech32().unwrap_or(raw_address.to_string());
 
             self.coin_state(
@@ -306,7 +303,7 @@ impl Reducer {
                 output.clone(),
                 &tx_address,
                 &format!("{}#{}", tx_hash, output_idx),
-                &tx_output,
+                tx_output.clone(),
                 !rollback,
             )
             .await?;
@@ -332,21 +329,21 @@ impl Reducer {
                                     quantity.to_string().as_str(),
                                     !rollback,
                                 )
-                                .await?
+                                .await?;
                             }
                         }
                     };
                 }
             }
 
-            let soa = self.stake_or_address_from_address(raw_address);
+            let soa = self.stake_or_address_from_address(&raw_address);
             self.tx_state(
                 output,
                 soa.as_str(),
                 &format!("{}#{}", tx_hash, output_idx),
                 !rollback,
             )
-            .await?
+            .await?;
         }
 
         Ok(())
@@ -365,6 +362,7 @@ impl Reducer {
 
         match (block, genesis_utxos, genesis_hash) {
             (Some(block), _, _) => {
+                log::warn!("i think this is a normal block I am reducing");
                 let block_ctx = &block_ctx;
 
                 for tx in block.txs() {
@@ -378,19 +376,25 @@ impl Reducer {
                                     rollback,
                                     &policy,
                                 )
-                                .await?;
+                                .await
+                                .apply_policy(&policy)
+                                .or_panic()?;
                             }
                         }
 
-                        for (idx, produced) in tx.produces().iter() {
+                        for (idx, _) in tx.produces().iter() {
                             self.process_produced_txo(
                                 &tx.hash(),
-                                &produced,
+                                &BlockOrigination::Chain(
+                                    tx.produces().get(idx.clone()).as_ref().unwrap().1.clone(),
+                                ),
                                 idx.clone(),
                                 output.clone(),
                                 rollback,
                             )
-                            .await?;
+                            .await
+                            .apply_policy(&policy)
+                            .or_panic()?;
                         }
                     }
                 }
@@ -399,15 +403,16 @@ impl Reducer {
             }
 
             (_, Some(genesis_utxos), _) => {
+                log::warn!("I know I am in genesis");
                 // let mut address_lovelace_agg: HashMap<String, u64> = HashMap::new();
                 for utxo in genesis_utxos {
-                    // *address_lovelace_agg
-                    //     .entry(hex::encode(utxo.1.to_vec()))
-                    //     .or_insert(0) += utxo.2;
                     let address = hex::encode(utxo.1.to_vec());
                     let key = format!("{}#{}", hex::encode(utxo.0), 0);
 
-                    self.tx_state(output.clone(), &address, &key, true).await?;
+                    self.tx_state(output.clone(), &address, &key, true)
+                        .await
+                        .apply_policy(&policy)
+                        .or_panic()?;
 
                     self.coin_state(
                         output.clone(),
@@ -416,10 +421,10 @@ impl Reducer {
                         &utxo.2.to_string(),
                         !rollback,
                     )
-                    .await?;
+                    .await
+                    .apply_policy(&policy)
+                    .or_panic()?;
                 }
-
-                //for (address, lovelace) in &address_lovelace_agg {} // todo determine if we can merge this with utxo_owners or whatever it is for wallet management.. stubbed for now
 
                 Ok(())
             }

@@ -1,6 +1,7 @@
 use crate::model::CRDTCommand;
 use crate::pipeline::Context;
 use crate::{crosscut, model, prelude::*};
+use gasket::framework::WorkerError;
 use gasket::messaging::tokio::OutputPort;
 use pallas::crypto::hash::Hash;
 use pallas::ledger::configs::byron::GenesisUtxo;
@@ -142,7 +143,7 @@ impl Reducer {
         spending: bool,
         slot: u64,
         time: u64,
-    ) -> Result<(), gasket::framework::WorkerError> {
+    ) -> Result<(), Error> {
         let adjusted_lovelace = match spending {
             true => -(lovelace as i64),
             false => lovelace as i64,
@@ -169,7 +170,7 @@ impl Reducer {
                                 .into(),
                             )
                             .await
-                            .or_panic()?;
+                            .map_err(|_| Error::gasket(WorkerError::Send))?;
                     }
                 }
 
@@ -184,7 +185,7 @@ impl Reducer {
                         .into(),
                     )
                     .await
-                    .or_panic()?;
+                    .map_err(|_| Error::gasket(WorkerError::Send))?;
             }
         }
 
@@ -203,7 +204,7 @@ impl Reducer {
                             .into(),
                         )
                         .await
-                        .or_panic()?;
+                        .map_err(|_| Error::gasket(WorkerError::Send))?;
                 }
 
                 for (fingerprint, soas) in asset_to_owner {
@@ -222,7 +223,7 @@ impl Reducer {
                                         .into(),
                                     )
                                     .await
-                                    .or_panic()?;
+                                    .map_err(|_| Error::gasket(WorkerError::Send))?;
                             }
                         }
                     }
@@ -241,7 +242,7 @@ impl Reducer {
         slot: u64,
         rollback: bool,
         timeslot: u64,
-    ) -> Result<(), gasket::framework::WorkerError> {
+    ) -> Result<(), Error> {
         match (meo, genesis_utxo) {
             (Some(meo), None) => {
                 let received_to_soa = self.stake_or_address_from_address(&meo.address().unwrap());
@@ -271,7 +272,7 @@ impl Reducer {
                 .await
             }
 
-            _ => Err(gasket::framework::WorkerError::Panic),
+            _ => Err(Error::gasket(WorkerError::Panic)),
         }
     }
 
@@ -282,9 +283,8 @@ impl Reducer {
         ctx: &model::BlockContext,
         slot: u64,
         rollback: bool,
-        error_policy: &crosscut::policies::RuntimePolicy,
         timeslot: u64,
-    ) -> Result<(), gasket::framework::WorkerError> {
+    ) -> Result<(), Error> {
         match ctx.find_utxo(&mei.output_ref()) {
             Ok(spent_output) => {
                 let spent_from_soa =
@@ -300,12 +300,11 @@ impl Reducer {
                     timeslot,
                 )
                 .await
-                .or_panic()
             }
 
             Err(_) => match ctx.find_genesis_utxo(&mei.output_ref()) {
-                Ok(genesis_utxo) => self
-                    .process_asset_movement(
+                Ok(genesis_utxo) => {
+                    self.process_asset_movement(
                         output,
                         &hex::encode(&genesis_utxo.1.to_vec()),
                         genesis_utxo.2,
@@ -315,9 +314,9 @@ impl Reducer {
                         timeslot,
                     )
                     .await
-                    .or_panic(),
+                }
 
-                Err(_) => Err(gasket::framework::WorkerError::Panic),
+                Err(e) => Err(e),
             },
         }
     }
@@ -345,10 +344,10 @@ impl Reducer {
                             &block_ctx,
                             slot,
                             rollback,
-                            &error_policy,
                             time_provider.slot_to_wallclock(slot),
                         )
                         .await
+                        .apply_policy(&error_policy)
                         .or_panic()?;
                     }
 
@@ -362,6 +361,7 @@ impl Reducer {
                             time_provider.slot_to_wallclock(slot),
                         )
                         .await
+                        .apply_policy(&error_policy)
                         .or_panic()?;
                     }
                 }

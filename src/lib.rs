@@ -37,6 +37,9 @@ pub enum Error {
     #[error("storage error: {0}")]
     StorageError(String),
 
+    #[error("gasket error: {0}")]
+    GasketError(gasket::framework::WorkerError),
+
     #[error("chain-sync intersect not found")]
     IntersectNotFound,
 
@@ -82,6 +85,10 @@ impl Error {
 
     pub fn storage(error: impl Display) -> Error {
         Error::StorageError(error.to_string())
+    }
+
+    pub fn gasket(error: gasket::framework::WorkerError) -> Error {
+        Error::GasketError(error)
     }
 
     pub fn custom(error: Box<dyn std::error::Error>) -> Error {

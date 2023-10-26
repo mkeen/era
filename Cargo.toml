@@ -30,7 +30,10 @@ assets = [
 cargo-deb = "1.44.1"
 
 [dependencies]
-pallas = { git = "https://github.com/txpipe/pallas.git"} 
+pallas = { git = "https://github.com/txpipe/pallas.git"}
+pallas-addresses = { git = "https://github.com/txpipe/pallas.git", package = "pallas-addresses" }
+pallas-primitives = { git = "https://github.com/txpipe/pallas.git", package = "pallas-primitives" } 
+
 hex = "0.4.3"
 net2 = "0.2.37"
 blake2 = "0.10.6"

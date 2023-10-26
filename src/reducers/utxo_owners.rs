@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::Mutex;
 
-use crate::model::CRDTCommand;
+use crate::model::{BlockOrigination, CRDTCommand};
 use crate::pipeline::Context;
 use crate::{crosscut, model};
 
@@ -32,7 +32,7 @@ pub struct Reducer {
     ctx: Arc<Mutex<Context>>,
 }
 
-pub fn resolve_datum(utxo: &MultiEraOutput, tx: &MultiEraTx) -> Result<PlutusData, ()> {
+pub fn resolve_datum(utxo: &BlockOrigination, tx: &MultiEraTx) -> Result<PlutusData, ()> {
     match utxo.datum() {
         Some(PseudoDatumOption::Data(CborWrap(pd))) => Ok(pd.unwrap()),
         Some(PseudoDatumOption::Hash(datum_hash)) => {
@@ -49,9 +49,9 @@ pub fn resolve_datum(utxo: &MultiEraOutput, tx: &MultiEraTx) -> Result<PlutusDat
 }
 
 impl Reducer {
-    fn get_key_value(
+    fn get_key_value<'b>(
         &self,
-        utxo: &MultiEraOutput,
+        utxo: &'b BlockOrigination<'b>,
         tx: &MultiEraTx,
         output_ref: &(Hash<32>, u64),
     ) -> Option<(String, String)> {
@@ -147,7 +147,7 @@ impl Reducer {
                                         .into(),
                                     )
                                     .await
-                                    .map_err(|e| WorkerError::Send)
+                                    .map_err(|_| WorkerError::Send)
                                     .or_panic()?;
                             }
                         }
@@ -155,17 +155,7 @@ impl Reducer {
 
                     for (index, produced) in tx.produces() {
                         let output_ref = (tx.hash().clone(), index as u64);
-                        if let Some((key, value)) = self.get_key_value(&produced, &tx, &output_ref)
-                        {
-                            log::warn!("i see a tx {:?}", prefix);
-                            output
-                                .lock()
-                                .await
-                                .send(model::CRDTCommand::set_add(Some(prefix), &key, value).into())
-                                .await
-                                .map_err(|e| WorkerError::Send)
-                                .or_panic()?;
-                        }
+                        let block_txo = BlockOrigination::Chain(produced);
                     }
                 }
 
