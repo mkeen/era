@@ -8,7 +8,7 @@ use gasket::{
     framework::*,
     messaging::tokio::connect_ports,
     retries,
-    runtime::{spawn_stage, Policy, Tether},
+    runtime::{spawn_stage, Policy, StagePhase, Tether, TetherState},
 };
 use pallas::ledger::{configs::byron::GenesisFile, traverse::wellknown::GenesisValues};
 use tokio::sync::Mutex;
@@ -78,6 +78,46 @@ impl gasket::framework::Worker<Stage> for Pipeline {
         pipe.tethers.push(storage_stage.spawn_stage(&pipe));
         pipe.tethers.push(spawn_stage(reducer, pipe.policy.clone()));
         pipe.tethers.push(enrich_stage.spawn_stage(&pipe));
+
+        let mut startup_error = false;
+
+        loop {
+            let mut bootstrapping_consumers = false;
+            for tether in &pipe.tethers {
+                match tether.check_state() {
+                    TetherState::Blocked(_) => {
+                        bootstrapping_consumers = true;
+                    }
+                    TetherState::Dropped => {
+                        startup_error = true;
+                        break;
+                    }
+                    TetherState::Alive(s) => match s {
+                        StagePhase::Bootstrap => {
+                            bootstrapping_consumers = true;
+                        }
+                        StagePhase::Teardown => {
+                            startup_error = true;
+                        }
+                        StagePhase::Ended => {
+                            startup_error = true;
+                        }
+                        _ => {}
+                    },
+                }
+            }
+
+            if startup_error {
+                return Err(WorkerError::Panic);
+            }
+
+            if !bootstrapping_consumers {
+                break;
+            }
+        }
+
+        log::error!("WE ARE READY TO LIVE");
+
         pipe.tethers.push(source_stage.spawn_stage(&pipe));
 
         return Ok(pipe);

@@ -111,7 +111,6 @@ impl Worker {
 
             (false, Some(byron_genesis_hash), Some(_)) => {
                 point = Point::Specific(0, byron_genesis_hash.to_vec());
-                log::warn!("i have been called to reduce 0,0");
 
                 output
                     .lock()
