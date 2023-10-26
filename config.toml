@@ -44,7 +44,7 @@ type = "AssetsBalances"
 [[reducers]]
 type = "Handles"
 key_prefix = "h"
-policy_id_hex = "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a"
+policy_id = "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a"
 
 [[reducers]]
 type = "AssetsLastMoved"
@@ -57,11 +57,6 @@ key_prefix = "pr"
 [[reducers]]
 type = "StakeToPool"
 key_prefix = "pl"
-
-# [[reducers]]
-# type = "UtxoOwners"
-# key_prefix = "tx"
-# coin_key_prefix = "c"
 
 [intersect]
 type = "Origin"

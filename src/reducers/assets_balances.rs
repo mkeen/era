@@ -323,11 +323,12 @@ impl Reducer {
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
     ) -> Result<(), gasket::framework::WorkerError> {
+        let error_policy = self.ctx.lock().await.error_policy.clone();
+
         match (block, block_ctx, genesis_utxos, genesis_hash) {
             (Some(block), Some(block_ctx), None, None) => {
                 let slot = block.slot();
                 let time_provider = crosscut::time::NaiveProvider::new(self.ctx.clone()).await;
-                let error_policy = self.ctx.lock().await.error_policy.clone();
 
                 for tx in block.txs() {
                     for consumes in tx.consumes().iter() {
@@ -360,10 +361,11 @@ impl Reducer {
                 Ok(())
             }
 
-            (None, None, Some(genesis_utxos), Some(_)) => {
+            (None, None, Some(genesis_utxos), _) => {
                 for utxo in genesis_utxos {
                     self.process_received(output.clone(), None, Some(utxo), false, 0)
                         .await
+                        .apply_policy(&error_policy)
                         .or_panic()?;
                 }
 
