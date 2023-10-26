@@ -362,7 +362,6 @@ impl Reducer {
 
         match (block, genesis_utxos, genesis_hash) {
             (Some(block), _, _) => {
-                log::warn!("i think this is a normal block I am reducing");
                 let block_ctx = &block_ctx;
 
                 for tx in block.txs() {
@@ -403,8 +402,6 @@ impl Reducer {
             }
 
             (_, Some(genesis_utxos), _) => {
-                log::warn!("I know I am in genesis");
-                // let mut address_lovelace_agg: HashMap<String, u64> = HashMap::new();
                 for utxo in genesis_utxos {
                     let address = hex::encode(utxo.1.to_vec());
                     let key = format!("{}#{}", hex::encode(utxo.0), 0);

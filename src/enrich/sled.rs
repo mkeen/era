@@ -83,15 +83,12 @@ fn fetch_referenced_utxo<'a>(
     db: &sled::Db,
     utxo_ref: &OutputRef,
 ) -> Result<Option<(OutputRef, Era, Vec<u8>)>, crate::Error> {
-    log::warn!("trying to find {}", utxo_ref.to_string());
-
     if let Some(ivec) = db
         .get(utxo_ref.to_string().as_bytes())
         .map_err(crate::Error::storage)?
     {
         let SledTxValue(era, cbor) = ivec.try_into().map_err(crate::Error::storage)?;
         let era: Era = era.try_into().map_err(crate::Error::storage)?;
-        log::warn!("found {}", utxo_ref.to_string());
 
         Ok(Some((utxo_ref.clone(), era, cbor)))
     } else {
@@ -157,8 +154,6 @@ impl Worker {
 
         let value: IVec = SledTxValue(0, encoded_genesis_utxo).try_into()?;
 
-        log::warn!("{:?}", genesis_utxo);
-
         inserts.inc(1);
 
         db.insert(format!("{}#{}", genesis_utxo.0, "0").as_bytes(), value)
@@ -217,7 +212,6 @@ impl Worker {
                 match_count += 1;
             } else {
                 mismatch_count += 1;
-                log::warn!("DEST: {:?} {} {:?}", required, mismatch_count, m);
             }
         }
 
@@ -373,8 +367,6 @@ impl gasket::framework::Worker<Stage> for Worker {
             Ok(db_refs) => match db_refs {
                 Some((db, consumed_ring)) => match unit {
                     model::RawBlockPayload::RollForwardGenesis => {
-                        log::warn!("rolling forward genesis provided, working it");
-
                         let all = genesis_utxos(&stage.ctx.lock().await.genesis_file).clone();
 
                         for utxo in all {
