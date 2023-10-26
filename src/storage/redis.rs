@@ -147,7 +147,6 @@ impl gasket::framework::Worker<Stage> for Worker {
         match unit {
             model::CRDTCommand::Noop => Ok(()),
             model::CRDTCommand::BlockStarting(_) => {
-                log::warn!("starting block");
                 // start redis transaction
                 redis::cmd("MULTI")
                     .query(self.connection.as_mut().unwrap())
