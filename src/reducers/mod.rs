@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use futures::Future;
 use gasket::messaging::tokio::OutputPort;
 use pallas::crypto::hash::Hash;
 use pallas::ledger::configs::byron::GenesisUtxo;
@@ -8,9 +7,9 @@ use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
+use crate::model;
 use crate::model::CRDTCommand;
 use crate::pipeline::Context;
-use crate::{crosscut, model};
 
 pub mod macros;
 
@@ -23,14 +22,12 @@ pub mod metadata;
 pub mod parameters;
 pub mod stake_to_pool;
 pub mod utxo;
-pub mod utxo_owners;
 
 pub mod worker;
 
 #[derive(Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum Config {
-    UtxoOwners(utxo_owners::Config),
     Utxo(utxo::Config),
     Parameters(parameters::Config),
     Metadata(metadata::Config),
@@ -43,7 +40,6 @@ pub enum Config {
 impl Config {
     fn bootstrapper(self, ctx: Arc<Mutex<Context>>) -> Reducer {
         match self {
-            Config::UtxoOwners(c) => c.plugin(ctx),
             Config::Utxo(c) => c.plugin(ctx),
             Config::Parameters(c) => c.plugin(ctx),
             Config::Metadata(c) => c.plugin(ctx),
@@ -57,7 +53,6 @@ impl Config {
 
 #[derive(Clone)]
 pub enum Reducer {
-    UtxoOwners(utxo_owners::Reducer),
     Utxo(utxo::Reducer),
     Parameters(parameters::Reducer),
     Metadata(metadata::Reducer),
@@ -78,17 +73,6 @@ impl Reducer {
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
     ) -> Result<(), gasket::framework::WorkerError> {
         match self {
-            Reducer::UtxoOwners(x) => {
-                x.reduce(
-                    block,
-                    block_ctx,
-                    genesis_utxos,
-                    genesis_hash,
-                    rollback,
-                    output.clone(),
-                )
-                .await
-            }
             Reducer::Utxo(x) => {
                 x.reduce(
                     block,

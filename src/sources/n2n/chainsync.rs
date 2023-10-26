@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use gasket::messaging::tokio::OutputPort;
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraHeader};
@@ -12,7 +11,7 @@ use tokio::sync::Mutex;
 
 use crate::model::RawBlockPayload;
 use crate::pipeline::Context;
-use crate::{crosscut, model, sources, storage, Error};
+use crate::{crosscut, sources, storage, Error};
 
 use crate::prelude::*;
 

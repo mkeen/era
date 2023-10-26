@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use bech32::{ToBase32, Variant};
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
-use pallas::ledger::addresses::{Address, ByronAddress, StakeAddress};
+use pallas::ledger::addresses::{Address, StakeAddress};
 use std::collections::HashMap;
 use std::result::Result;
 use std::sync::Arc;
@@ -141,7 +141,6 @@ impl Reducer {
         lovelace: u64,
         assets: &'a Vec<MultiEraPolicyAssets<'a>>,
         spending: bool,
-        slot: u64,
         time: u64,
     ) -> Result<(), Error> {
         let adjusted_lovelace = match spending {
@@ -239,7 +238,6 @@ impl Reducer {
         output: Arc<Mutex<OutputPort<model::CRDTCommand>>>,
         meo: Option<MultiEraOutput<'a>>,
         genesis_utxo: Option<GenesisUtxo>,
-        slot: u64,
         rollback: bool,
         timeslot: u64,
     ) -> Result<(), Error> {
@@ -253,7 +251,6 @@ impl Reducer {
                     meo.lovelace_amount(),
                     &meo.non_ada_assets(),
                     rollback,
-                    slot,
                     timeslot,
                 )
                 .await
@@ -266,7 +263,6 @@ impl Reducer {
                     genesis_utxo.2,
                     &Vec::default(),
                     false,
-                    0,
                     timeslot,
                 )
                 .await
@@ -281,7 +277,6 @@ impl Reducer {
         output: Arc<Mutex<OutputPort<model::CRDTCommand>>>,
         mei: &'a MultiEraInput<'a>,
         ctx: &model::BlockContext,
-        slot: u64,
         rollback: bool,
         timeslot: u64,
     ) -> Result<(), Error> {
@@ -296,7 +291,6 @@ impl Reducer {
                     spent_output.lovelace_amount(),
                     &spent_output.non_ada_assets(),
                     !rollback,
-                    slot,
                     timeslot,
                 )
                 .await
@@ -310,7 +304,6 @@ impl Reducer {
                         genesis_utxo.2,
                         &Default::default(),
                         !rollback,
-                        slot,
                         timeslot,
                     )
                     .await
@@ -342,7 +335,6 @@ impl Reducer {
                             output.clone(),
                             consumes,
                             &block_ctx,
-                            slot,
                             rollback,
                             time_provider.slot_to_wallclock(slot),
                         )
@@ -356,7 +348,6 @@ impl Reducer {
                             output.clone(),
                             Some(utxo_produced.clone()),
                             None,
-                            slot,
                             rollback,
                             time_provider.slot_to_wallclock(slot),
                         )
@@ -371,7 +362,7 @@ impl Reducer {
 
             (None, None, Some(genesis_utxos), Some(_)) => {
                 for utxo in genesis_utxos {
-                    self.process_received(output.clone(), None, Some(utxo), 0, false, 0)
+                    self.process_received(output.clone(), None, Some(utxo), false, 0)
                         .await
                         .or_panic()?;
                 }

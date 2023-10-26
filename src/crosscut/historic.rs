@@ -1,6 +1,4 @@
 use crate::{model::RawBlockPayload, Error};
-use futures::Future;
-use gasket::framework::AsWorkError;
 use pallas::network::miniprotocols::Point;
 use serde::{Deserialize, Serialize};
 use std::mem;

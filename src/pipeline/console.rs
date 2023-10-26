@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use gasket::{framework::WorkerError, metrics::Reading};
 use lazy_static::{__Deref, lazy_static};
@@ -20,7 +20,6 @@ impl Default for Mode {
 }
 
 struct TuiConsole {
-    last_report: Mutex<Instant>,
     chainsync_progress: indicatif::ProgressBar,
     received_blocks: indicatif::ProgressBar,
     reducer_ops_count: indicatif::ProgressBar,
@@ -93,7 +92,6 @@ impl TuiConsole {
             storage_ops_count: Self::build_counter_spinner("storage ops", &container),
             historic_blocks: Self::build_counter_spinner("history inserts", &container),
             historic_blocks_removed: Self::build_counter_spinner("history removes", &container),
-            last_report: Mutex::new(Instant::now()),
         }
     }
 

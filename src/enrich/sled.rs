@@ -4,7 +4,6 @@ use gasket::framework::*;
 
 use gasket::messaging::tokio::{InputPort, OutputPort};
 
-use pallas::crypto::hash::Hash;
 use pallas::ledger::configs::byron::{genesis_utxos, GenesisUtxo};
 
 use pallas::{

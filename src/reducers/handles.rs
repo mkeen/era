@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use pallas::ledger::addresses::{Address, StakeAddress};
-use pallas::ledger::traverse::{MultiEraAsset, MultiEraBlock};
+use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
 
 use gasket::messaging::tokio::OutputPort;
@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 
 use crate::model::CRDTCommand;
 use crate::pipeline::Context;
-use crate::{crosscut, model, prelude::*};
+use crate::{model, prelude::*};
 
 use super::utils::AssetFingerprint;
 
@@ -35,21 +35,6 @@ pub struct Reducer {
 }
 
 impl Reducer {
-    fn to_string_output(&self, asset: MultiEraAsset) -> Option<String> {
-        let policy_id = hex::encode(asset.policy());
-
-        if policy_id.eq(self.config.policy_id.clone().unwrap().as_str()) {
-            if let MultiEraAsset::AlonzoCompatibleOutput(_, name, _) = asset {
-                return match std::str::from_utf8(name) {
-                    Ok(a) => Some(a.to_string()),
-                    Err(_) => None,
-                };
-            }
-        }
-
-        None
-    }
-
     pub async fn reduce<'b>(
         &mut self,
         block: Option<MultiEraBlock<'b>>,

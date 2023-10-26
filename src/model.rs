@@ -2,12 +2,12 @@ use std::{collections::HashMap, fmt::Debug};
 
 use std::convert::Into;
 
-use pallas::codec::minicbor::{self, Decode, Encode};
+use pallas::codec::minicbor;
 use pallas::crypto::hash::Hash;
 use pallas::ledger::configs::byron::GenesisUtxo;
 use pallas::ledger::traverse::MultiEraPolicyAssets;
 use pallas::{
-    ledger::traverse::{Era, MultiEraBlock, MultiEraOutput, MultiEraTx, OutputRef},
+    ledger::traverse::{Era, MultiEraBlock, MultiEraOutput, OutputRef},
     network::miniprotocols::Point,
 };
 

@@ -11,7 +11,7 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 
 use crate::{
-    crosscut::{self, PointArg},
+    crosscut::PointArg,
     model,
     pipeline::{self, Context},
 };
@@ -48,7 +48,7 @@ impl Config {
 
 #[derive(Clone)]
 pub enum Cursor {
-    Skip(skip::Cursor),
+    Skip,
     Redis(redis::Cursor),
 
     #[cfg(feature = "elastic")]
@@ -58,7 +58,7 @@ pub enum Cursor {
 impl Cursor {
     pub fn last_point(&mut self) -> Result<Option<PointArg>, crate::Error> {
         match self {
-            Cursor::Skip(x) => x.last_point(),
+            Cursor::Skip => Ok(None),
             Cursor::Redis(x) => x.last_point(),
 
             #[cfg(feature = "elastic")]
@@ -78,7 +78,7 @@ pub enum Bootstrapper {
 impl Bootstrapper {
     pub fn build_cursor(&mut self) -> Cursor {
         match self {
-            Bootstrapper::Skip(x) => Cursor::Skip(x.cursor.clone()),
+            Bootstrapper::Skip(_) => Cursor::Skip,
             Bootstrapper::Redis(x) => Cursor::Redis(x.cursor.clone()),
 
             #[cfg(feature = "elastic")]

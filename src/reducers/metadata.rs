@@ -6,7 +6,7 @@ use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 
 use pallas::codec::utils::KeyValuePairs;
-use pallas::ledger::primitives::alonzo::{Metadata, Metadatum, MetadatumLabel};
+use pallas::ledger::primitives::alonzo::{Metadatum, MetadatumLabel};
 use pallas::ledger::traverse::MultiEraBlock;
 
 use gasket::messaging::tokio::OutputPort;
@@ -18,7 +18,6 @@ use tokio::sync::Mutex;
 use crate::crosscut;
 use crate::model::{CRDTCommand, Delta};
 use crate::pipeline::Context;
-use crate::prelude::*;
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
@@ -145,7 +144,6 @@ impl Reducer {
         policy_map: Metadatum,
         policy_id_str: String,
         asset_name_str: String,
-        slot_no: u64,
         rollback: bool,
         prefix: &str,
         royalty_prefix: &str,
@@ -264,7 +262,6 @@ impl Reducer {
                                                     policy_map.clone(),
                                                     policy_id_str.clone(),
                                                     asset_name_str.clone(),
-                                                    block.slot().clone(),
                                                     rollback,
                                                     prefix,
                                                     royalty_prefix,

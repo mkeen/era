@@ -6,7 +6,7 @@ use pallas::network::miniprotocols::Point;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
-use crate::{crosscut, pipeline, storage::Cursor};
+use crate::{pipeline, storage::Cursor};
 
 #[derive(Clone, Debug)]
 pub enum ChainSyncInternalPayload {

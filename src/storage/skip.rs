@@ -8,20 +8,13 @@ use tokio::sync::Mutex;
 use crate::{crosscut, model::CRDTCommand, pipeline::Context};
 
 #[derive(Deserialize, Clone)]
-pub struct Config {
-    last_point: crosscut::PointArg,
-}
+pub struct Config {}
 
 impl Config {
     pub fn bootstrapper(self, ctx: Arc<Mutex<Context>>) -> Stage {
-        let cursor = Cursor {
-            last_point: Arc::new(Mutex::new(None)),
-        };
-
         Stage {
-            config: self.clone(),
+            _config: self.clone(),
             input: Default::default(),
-            cursor,
             ctx,
             ops_count: Default::default(),
         }
@@ -29,9 +22,7 @@ impl Config {
 }
 
 #[derive(Clone)]
-pub struct Cursor {
-    last_point: Arc<Mutex<Option<crosscut::PointArg>>>,
-}
+pub struct Cursor {}
 
 impl Cursor {
     pub fn last_point(&self) -> Result<Option<crosscut::PointArg>, crate::Error> {
@@ -44,8 +35,7 @@ pub struct Worker {}
 #[derive(Stage)]
 #[stage(name = "storage-skip", unit = "CRDTCommand", worker = "Worker")]
 pub struct Stage {
-    config: Config,
-    pub cursor: Cursor,
+    _config: Config,
     pub ctx: Arc<Mutex<Context>>,
 
     pub input: InputPort<CRDTCommand>,

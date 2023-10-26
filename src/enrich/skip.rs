@@ -10,7 +10,7 @@ pub struct Config {}
 impl Config {
     pub fn bootstrapper(self) -> Stage {
         Stage {
-            config: self,
+            _config: self,
             input: Default::default(),
             output: Default::default(),
             ops_count: Default::default(),
@@ -21,7 +21,7 @@ impl Config {
 #[derive(Stage)]
 #[stage(name = "enrich-skip", unit = "RawBlockPayload", worker = "Worker")]
 pub struct Stage {
-    config: Config,
+    _config: Config,
 
     pub input: InputPort<RawBlockPayload>,
     pub output: OutputPort<EnrichedBlockPayload>,

@@ -176,7 +176,7 @@ impl gasket::framework::Worker<Stage> for Worker {
         Ok(WorkSchedule::Unit(msg.payload))
     }
 
-    async fn execute(&mut self, unit: &CRDTCommand, stage: &mut Stage) -> Result<(), WorkerError> {
+    async fn execute(&mut self, _: &CRDTCommand, stage: &mut Stage) -> Result<(), WorkerError> {
         let batch = recv_batch(&mut stage.input).await.unwrap();
         let count = batch.items.len();
         let client = self.client.as_ref().unwrap();

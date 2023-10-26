@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use bech32::{ToBase32, Variant};
@@ -7,8 +6,7 @@ use blake2::Blake2bVar;
 use pallas::crypto::hash::Hash;
 use pallas::ledger::addresses::{Address, StakeAddress};
 use pallas::ledger::configs::byron::GenesisUtxo;
-use pallas::ledger::traverse::{MultiEraAsset, MultiEraOutput};
-use pallas::ledger::traverse::{MultiEraBlock, OutputRef};
+use pallas::ledger::traverse::{MultiEraAsset, MultiEraBlock, OutputRef};
 use serde::{Deserialize, Serialize};
 
 use gasket::framework::WorkerError;
@@ -17,7 +15,7 @@ use tokio::sync::Mutex;
 
 use crate::model::{BlockOrigination, CRDTCommand};
 use crate::pipeline::Context;
-use crate::{crosscut, model, prelude::*};
+use crate::{model, prelude::*};
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
@@ -205,7 +203,6 @@ impl Reducer {
         input: &OutputRef,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
         rollback: bool,
-        error_policy: &crosscut::policies::RuntimePolicy,
     ) -> Result<(), Error> {
         let utxo = ctx.find_utxo(input)?;
 
@@ -373,7 +370,6 @@ impl Reducer {
                                     &consumed,
                                     output.clone(),
                                     rollback,
-                                    &policy,
                                 )
                                 .await
                                 .apply_policy(&policy)

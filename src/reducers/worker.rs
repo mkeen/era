@@ -9,15 +9,15 @@ use tokio::sync::Mutex;
 use crate::model::{CRDTCommand, EnrichedBlockPayload};
 use crate::pipeline::Context;
 
-use crate::{crosscut, model, prelude::*, reducers};
+use crate::{model, reducers};
 
 use super::Reducer;
 
 use gasket::framework::*;
 use gasket::messaging::tokio::{connect_ports, InputPort, OutputPort};
 
-struct Config {
-    reducers: Vec<Reducer>,
+pub struct _Config {
+    _reducers: Vec<Reducer>,
 } // todo use this like all the other gasket items
 
 pub struct Worker {}
