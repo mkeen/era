@@ -319,14 +319,13 @@ impl Reducer {
         block: Option<MultiEraBlock<'b>>,
         block_ctx: Option<model::BlockContext>,
         genesis_utxos: Option<Vec<GenesisUtxo>>,
-        genesis_hash: Option<Hash<32>>,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
     ) -> Result<(), gasket::framework::WorkerError> {
         let error_policy = self.ctx.lock().await.error_policy.clone();
 
-        match (block, block_ctx, genesis_utxos, genesis_hash) {
-            (Some(block), Some(block_ctx), None, None) => {
+        match (block, block_ctx, genesis_utxos) {
+            (Some(block), Some(block_ctx), _) => {
                 let slot = block.slot();
                 let time_provider = crosscut::time::NaiveProvider::new(self.ctx.clone()).await;
 
@@ -361,7 +360,7 @@ impl Reducer {
                 Ok(())
             }
 
-            (None, None, Some(genesis_utxos), _) => {
+            (None, None, Some(genesis_utxos)) => {
                 for utxo in genesis_utxos {
                     self.process_received(output.clone(), None, Some(utxo), false, 0)
                         .await

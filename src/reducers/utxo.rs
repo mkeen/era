@@ -351,14 +351,13 @@ impl Reducer {
         block: Option<MultiEraBlock<'b>>,
         block_ctx: Option<model::BlockContext>,
         genesis_utxos: Option<Vec<GenesisUtxo>>,
-        genesis_hash: Option<Hash<32>>,
         rollback: bool,
         output: Arc<Mutex<OutputPort<CRDTCommand>>>,
     ) -> Result<(), gasket::framework::WorkerError> {
         let policy = self.ctx.lock().await.error_policy.clone();
 
-        match (block, genesis_utxos, genesis_hash) {
-            (Some(block), _, _) => {
+        match (block, genesis_utxos) {
+            (Some(block), _) => {
                 let block_ctx = &block_ctx;
 
                 for tx in block.txs() {
@@ -397,7 +396,7 @@ impl Reducer {
                 Ok(())
             }
 
-            (_, Some(genesis_utxos), _) => {
+            (_, Some(genesis_utxos)) => {
                 for utxo in genesis_utxos {
                     let address = hex::encode(utxo.1.to_vec());
                     let key = format!("{}#{}", hex::encode(utxo.0), 0);

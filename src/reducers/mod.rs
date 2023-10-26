@@ -74,15 +74,8 @@ impl Reducer {
     ) -> Result<(), gasket::framework::WorkerError> {
         match self {
             Reducer::Utxo(x) => {
-                x.reduce(
-                    block,
-                    block_ctx,
-                    genesis_utxos,
-                    genesis_hash,
-                    rollback,
-                    output.clone(),
-                )
-                .await
+                x.reduce(block, block_ctx, genesis_utxos, rollback, output.clone())
+                    .await
             }
             Reducer::Parameters(x) => {
                 x.reduce(block, genesis_utxos, genesis_hash, rollback, output)
@@ -91,15 +84,8 @@ impl Reducer {
             Reducer::Metadata(x) => x.reduce(block, rollback, output).await,
             Reducer::AssetsLastMoved(x) => x.reduce(block, output).await,
             Reducer::AssetsBalances(x) => {
-                x.reduce(
-                    block,
-                    block_ctx,
-                    genesis_utxos,
-                    genesis_hash,
-                    rollback,
-                    output,
-                )
-                .await
+                x.reduce(block, block_ctx, genesis_utxos, rollback, output)
+                    .await
             }
             Reducer::Handle(x) => x.reduce(block, block_ctx, rollback, output).await,
             Reducer::StakeToPool(x) => x.reduce(block, rollback, output).await,
