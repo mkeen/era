@@ -116,6 +116,8 @@ impl gasket::framework::Worker<Stage> for Pipeline {
             }
         }
 
+        log::error!("pipeline, come alive");
+
         pipe.tethers.push(source_stage.spawn_stage(&pipe));
 
         return Ok(pipe);
