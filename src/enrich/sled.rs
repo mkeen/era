@@ -26,7 +26,7 @@ use crate::{
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
-    pub db_path: String,
+    pub db_path: Option<String>,
     pub rollback_db_path: Option<String>,
 }
 
@@ -329,17 +329,29 @@ pub struct Stage {
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Worker {
     async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
+        let enrich_config = sled::Config::default()
+            .path(
+                stage
+                    .config
+                    .clone()
+                    .db_path
+                    .unwrap_or("/etc/era/enrich_main".to_string()),
+            )
+            .cache_capacity(1073741824);
+
+        let rollback_config = sled::Config::default()
+            .path(
+                stage
+                    .config
+                    .clone()
+                    .rollback_db_path
+                    .unwrap_or("/etc/era/enrich_rollbacks".to_string()),
+            )
+            .cache_capacity(1073741824);
+
         let sled = Worker {
-            enrich_db: Some(
-                sled::open(&stage.config.db_path.clone())
-                    .or_retry()
-                    .unwrap(),
-            ),
-            rollback_db: Some(
-                sled::open(stage.config.rollback_db_path.clone().unwrap_or_default())
-                    .or_retry()
-                    .unwrap(),
-            ),
+            enrich_db: Some(enrich_config.open().or_panic()?),
+            rollback_db: Some(rollback_config.open().or_panic()?),
         };
 
         log::warn!("finished opening enrich databases");

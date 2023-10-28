@@ -13,6 +13,36 @@ use gasket::{
 use pallas::ledger::{configs::byron::GenesisFile, traverse::wellknown::GenesisValues};
 use tokio::sync::Mutex;
 
+pub enum StageTypes {
+    Source,
+    Enrich,
+    Reduce,
+    Storage,
+    Unknown,
+}
+
+impl std::convert::From<&str> for StageTypes {
+    fn from(item: &str) -> Self {
+        if item.contains("source") {
+            return StageTypes::Source;
+        }
+
+        if item.contains("enrich") {
+            return StageTypes::Enrich;
+        }
+
+        if item.contains("reduce") {
+            return StageTypes::Reduce;
+        }
+
+        if item.contains("storage") {
+            return StageTypes::Storage;
+        }
+
+        StageTypes::Unknown
+    }
+}
+
 #[derive(Stage)]
 #[stage(name = "pipeline-bootstrapper", unit = "()", worker = "Pipeline")]
 pub struct Stage {
@@ -27,7 +57,7 @@ pub struct Stage {
 #[async_trait::async_trait(?Send)]
 impl gasket::framework::Worker<Stage> for Pipeline {
     async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
-        console::initialize(&Some(stage.args_console.clone().unwrap()));
+        console::initialize(Some(stage.args_console.clone().unwrap())).await;
 
         let mut pipe = Self {
             policy: Policy {
@@ -86,20 +116,25 @@ impl gasket::framework::Worker<Stage> for Pipeline {
             for tether in &pipe.tethers {
                 match tether.check_state() {
                     TetherState::Blocked(_) => {
+                        log::error!("tether blocked {}", tether.name());
                         bootstrapping_consumers = true;
                     }
                     TetherState::Dropped => {
+                        log::error!("tether dropped {}", tether.name());
                         startup_error = true;
                         break;
                     }
                     TetherState::Alive(s) => match s {
                         StagePhase::Bootstrap => {
+                            log::error!("tether bootstrapping {}", tether.name());
                             bootstrapping_consumers = true;
                         }
                         StagePhase::Teardown => {
+                            log::error!("tether tearing down {}", tether.name());
                             startup_error = true;
                         }
                         StagePhase::Ended => {
+                            log::error!("tether is over {}", tether.name());
                             startup_error = true;
                         }
                         _ => {}

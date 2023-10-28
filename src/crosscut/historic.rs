@@ -1,7 +1,7 @@
 use crate::{model::RawBlockPayload, Error};
 use pallas::network::miniprotocols::Point;
 use serde::{Deserialize, Serialize};
-use std::mem;
+use std::{mem, path::PathBuf};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -50,7 +50,12 @@ fn to_zero_padded_string(point: &Point) -> String {
 
 impl BufferBlocks {
     fn open_db(config: BlockConfig) -> Self {
-        let db = sled::open(config.clone().db_path).unwrap();
+        let db = sled::Config::default()
+            .path(config.clone().db_path)
+            .cache_capacity(1073741824)
+            .open()
+            .unwrap();
+
         log::error!("opened block buffer db");
         let queue: Vec<(String, Vec<u8>)> = Vec::default();
 
