@@ -70,6 +70,8 @@ impl gasket::framework::Worker<Stage> for Pipeline {
             tethers: Default::default(),
         };
 
+        console::refresh(&stage.args_console, &pipe).await?;
+
         let enrich = stage.enrich_config.clone().unwrap();
 
         let rollback_db_path = stage
