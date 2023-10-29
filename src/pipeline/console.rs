@@ -585,8 +585,8 @@ impl TuiConsole {
                 progress_layout[2],
             );
 
-            let metrics_test = self.metrics_buffer.chain_bar_progress_rates();
-            let metrics_window_test = self.metrics_buffer.chain_bar_progress_window();
+            let chain_bar_progress_metrics = self.metrics_buffer.chain_bar_progress_rates();
+            let chain_bar_window = self.metrics_buffer.chain_bar_progress_window();
             let time_window = self.metrics_buffer.timestamp_window();
 
             let transaction_metrics = self.metrics_buffer.transaction_rate();
@@ -598,17 +598,24 @@ impl TuiConsole {
                     .marker(symbols::Marker::Braille)
                     .style(Style::default().fg(Color::Cyan))
                     .graph_type(GraphType::Line)
-                    .data(&metrics_test),
+                    .data(&chain_bar_progress_metrics),
                 Dataset::default()
                     .name("Transactions")
                     .marker(symbols::Marker::Braille)
                     .style(Style::default().fg(Color::Green))
                     .graph_type(GraphType::Line)
                     .data(&transaction_metrics),
-                Dataset::default(),
             ];
 
             let user_labels = self.metrics_buffer.chain_bar_progress_user_labels();
+
+            let y_max = chain_bar_window.1.max(transaction_window.1);
+            let y_min = chain_bar_window.1.min(transaction_window.1);
+            let y_avg = (y_min + y_max) / 2.0;
+
+            let y_max_s = y_max.round().to_string();
+            let y_avg_s = y_avg.round().to_string();
+            let y_min_s = y_min.round().to_string();
 
             let chart = Chart::new(datasets)
                 .block(
@@ -622,11 +629,11 @@ impl TuiConsole {
                         .title("")
                         .style(Style::default().fg(Color::Gray))
                         .labels(vec![
-                            user_labels[0].as_str().bold(),
-                            user_labels[1].as_str().bold(),
-                            user_labels[2].as_str().bold(),
+                            "0".bold().into(),
+                            y_avg_s.as_str().bold(),
+                            y_max_s.as_str().bold(),
                         ])
-                        .bounds([0.0, metrics_window_test.1]),
+                        .bounds([0.0, y_max]),
                 )
                 .x_axis(
                     Axis::default()
