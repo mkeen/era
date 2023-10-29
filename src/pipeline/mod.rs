@@ -118,25 +118,20 @@ impl gasket::framework::Worker<Stage> for Pipeline {
             for tether in &pipe.tethers {
                 match tether.check_state() {
                     TetherState::Blocked(_) => {
-                        log::error!("tether blocked {}", tether.name());
                         bootstrapping_consumers = true;
                     }
                     TetherState::Dropped => {
-                        log::error!("tether dropped {}", tether.name());
                         startup_error = true;
                         break;
                     }
                     TetherState::Alive(s) => match s {
                         StagePhase::Bootstrap => {
-                            log::error!("tether bootstrapping {}", tether.name());
                             bootstrapping_consumers = true;
                         }
                         StagePhase::Teardown => {
-                            log::error!("tether tearing down {}", tether.name());
                             startup_error = true;
                         }
                         StagePhase::Ended => {
-                            log::error!("tether is over {}", tether.name());
                             startup_error = true;
                         }
                         _ => {}
@@ -152,8 +147,6 @@ impl gasket::framework::Worker<Stage> for Pipeline {
                 break;
             }
         }
-
-        log::error!("pipeline, come alive");
 
         pipe.tethers.push(source_stage.spawn_stage(&pipe));
 

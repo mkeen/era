@@ -574,7 +574,7 @@ impl TuiConsole {
             frame.render_widget(progress, progress_layout[1]);
 
             frame.render_widget(
-                Paragraph::new(snapshot.chain_bar_depth.get_str())
+                Paragraph::new(snapshot.chain_bar_depth.get_num().to_string().as_str())
                     .block(Block::new().padding(Padding::new(
                         1,                             // left
                         0,                             // right
@@ -592,20 +592,19 @@ impl TuiConsole {
             let transaction_metrics = self.metrics_buffer.transaction_rate();
             let transaction_window = self.metrics_buffer.transaction_rate_window();
 
-            let datasets = vec![
-                Dataset::default()
-                    .name("Blocks")
-                    .marker(symbols::Marker::Braille)
-                    .style(Style::default().fg(Color::Cyan))
-                    .graph_type(GraphType::Line)
-                    .data(&chain_bar_progress_metrics),
-                Dataset::default()
-                    .name("Transactions")
-                    .marker(symbols::Marker::Braille)
-                    .style(Style::default().fg(Color::Green))
-                    .graph_type(GraphType::Line)
-                    .data(&transaction_metrics),
-            ];
+            let dataset_blocks = vec![Dataset::default()
+                .name("Blocks")
+                .marker(symbols::Marker::Braille)
+                .style(Style::default().fg(Color::Cyan))
+                .graph_type(GraphType::Line)
+                .data(&chain_bar_progress_metrics)];
+
+            let dataset_txs = vec![Dataset::default()
+                .name("Transactions")
+                .marker(symbols::Marker::Braille)
+                .style(Style::default().fg(Color::Green))
+                .graph_type(GraphType::Line)
+                .data(&transaction_metrics)];
 
             let user_labels = self.metrics_buffer.chain_bar_progress_user_labels();
 
@@ -617,7 +616,45 @@ impl TuiConsole {
             let y_avg_s = y_avg.round().to_string();
             let y_min_s = y_min.round().to_string();
 
-            let chart = Chart::new(datasets)
+            let chain_bar_min_s = chain_bar_window.0.round().to_string();
+            let chain_bar_max_s = chain_bar_window.1.round().to_string();
+            let chain_bar_avg = (chain_bar_window.0 + chain_bar_window.1) / 2.0;
+            let chain_bar_avg_s = chain_bar_avg.round().to_string();
+
+            let tx_min_s = transaction_window.0.round().to_string();
+            let tx_max_s = transaction_window.1.round().to_string();
+            let tx_avg = (transaction_window.0 + transaction_window.1) / 2.0;
+            let tx_avg_s = tx_avg.round().to_string();
+
+            let chart = Chart::new(dataset_blocks)
+                .block(
+                    Block::default()
+                        .title("")
+                        .borders(Borders::NONE)
+                        .padding(Padding::new(1, 0, 0, 1)),
+                )
+                .y_axis(
+                    Axis::default()
+                        .title("")
+                        .style(Style::default().fg(Color::Gray))
+                        // .labels(vec![
+                        //     "0".bold(),
+                        //     chain_bar_avg_s.as_str().bold(),
+                        //     chain_bar_max_s.as_str().bold(),
+                        // ])
+                        .bounds([0.0, chain_bar_window.1]),
+                )
+                .x_axis(
+                    Axis::default()
+                        .title("")
+                        .style(Style::default().fg(Color::Gray))
+                        .bounds([time_window.0, time_window.1]),
+                );
+
+            frame.render_widget(chart, layout[2]);
+
+            let chart2 = Chart::new(dataset_txs)
+                .hidden_legend_constraints((Constraint::Max(0), Constraint::Max(0)))
                 .block(
                     Block::default()
                         .title("")
@@ -629,11 +666,12 @@ impl TuiConsole {
                         .title("")
                         .style(Style::default().fg(Color::Gray))
                         .labels(vec![
-                            "0".bold().into(),
-                            y_avg_s.as_str().bold(),
-                            y_max_s.as_str().bold(),
+                            "0".bold(),
+                            tx_avg_s.as_str().bold(),
+                            tx_max_s.as_str().bold(),
                         ])
-                        .bounds([0.0, y_max]),
+                        .labels_alignment(Alignment::Center)
+                        .bounds([0.0, transaction_window.1]),
                 )
                 .x_axis(
                     Axis::default()
@@ -641,7 +679,8 @@ impl TuiConsole {
                         .style(Style::default().fg(Color::Gray))
                         .bounds([time_window.0, time_window.1]),
                 );
-            frame.render_widget(chart, layout[2]);
+
+            frame.render_widget(chart2, layout[2]);
 
             // frame.render_widget(Paragraph::new("Bottom"), layout[0]);
             // frame.render_widget(Paragraph::new("Bottom"), layout[1]);
@@ -650,6 +689,18 @@ impl TuiConsole {
 
     fn refresh(&mut self, pipeline: &super::Pipeline) -> Result<(), WorkerError> {
         let mut snapshot = MetricsSnapshot::default();
+
+        // match event::read() {
+        //     Ok(event) => match event {
+        //         crossterm::event::Event::Key(key) => match key.code {
+        //             KeyCode::Char('q') => return Ok(()),
+        //             _ => {}
+        //         },
+
+        //         _ => {}
+        //     },
+        //     _ => {}
+        // }
 
         for tether in pipeline.tethers.iter() {
             let state = match tether.check_state() {
