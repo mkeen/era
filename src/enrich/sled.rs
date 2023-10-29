@@ -47,6 +47,7 @@ impl Config {
             enrich_matches: Default::default(),
             enrich_mismatches: Default::default(),
             enrich_blocks: Default::default(),
+            enrich_transactions: Default::default(),
             enrich_cancelled_empty_tx: Default::default(),
             ctx,
         }
@@ -324,6 +325,8 @@ pub struct Stage {
     pub enrich_mismatches: gasket::metrics::Counter,
     #[metric]
     pub enrich_cancelled_empty_tx: gasket::metrics::Counter,
+    #[metric]
+    pub enrich_transactions: gasket::metrics::Counter,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -407,11 +410,6 @@ impl gasket::framework::Worker<Stage> for Worker {
                         let block = block.unwrap();
 
                         let txs = block.txs();
-
-                        if txs.is_empty() {
-                            stage.enrich_cancelled_empty_tx.inc(1);
-                            return Ok(());
-                        }
 
                         match self
                             .par_fetch_referenced_utxos(db, block.number(), &txs)
