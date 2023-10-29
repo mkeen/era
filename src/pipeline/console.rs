@@ -123,6 +123,7 @@ pub struct MetricsSnapshot {
     timestamp: SystemTime,
     chain_bar_depth: MeteredValue,
     chain_bar_progress: MeteredValue,
+    blocks_processed: MeteredValue,
     transactions: MeteredValue,
     chain_era: MeteredValue,
     sources_status: String,
@@ -135,9 +136,10 @@ impl Default for MetricsSnapshot {
     fn default() -> Self {
         Self {
             timestamp: SystemTime::now(),
+            chain_era: MeteredValue::Label(Default::default()),
             chain_bar_depth: MeteredValue::Numerical(Default::default()),
             chain_bar_progress: MeteredValue::Numerical(Default::default()),
-            chain_era: MeteredValue::Label(Default::default()),
+            blocks_processed: MeteredValue::Numerical(Default::default()),
             transactions: MeteredValue::Numerical(Default::default()),
             sources_status: "uninitialized".into(),
             enrich_status: "uninitialized".into(),
@@ -148,18 +150,19 @@ impl Default for MetricsSnapshot {
 }
 
 impl MetricsSnapshot {
-    fn indexed_stub(idx: usize, size: usize) -> Self {
-        let mut timestamp = SystemTime::now();
+    fn indexed_stub(idx: usize, ring_depth: usize, timestamp: SystemTime) -> Self {
+        let mut timestamp = timestamp;
 
-        if idx + 1 != size {
+        if idx + 1 != ring_depth {
             timestamp = timestamp - Duration::from_secs(1);
         }
 
         Self {
             timestamp,
+            chain_era: MeteredValue::Label(Default::default()),
             chain_bar_depth: MeteredValue::Numerical(Default::default()),
             chain_bar_progress: MeteredValue::Numerical(Default::default()),
-            chain_era: MeteredValue::Label(Default::default()),
+            blocks_processed: MeteredValue::Numerical(Default::default()),
             transactions: MeteredValue::Numerical(Default::default()),
             sources_status: "uninitialized".into(),
             enrich_status: "uninitialized".into(),
@@ -182,18 +185,19 @@ pub struct RingBuffer {
 }
 
 impl RingBuffer {
-    pub fn new(capacity: usize) -> RingBuffer {
-        let mut vec = Vec::with_capacity(capacity);
-        for i in 0..capacity {
-            let element = MetricsSnapshot::indexed_stub(i, capacity);
+    pub fn new(ring_depth: usize) -> RingBuffer {
+        let now = SystemTime::now();
+        let mut vec = Vec::with_capacity(ring_depth);
+        for i in 0..ring_depth {
+            let element = MetricsSnapshot::indexed_stub(i, ring_depth, now);
             vec.push(element);
         }
 
         RingBuffer {
-            vec,
-            capacity,
+            vec: vec.clone(),
+            capacity: ring_depth,
             start: 0,
-            len: capacity,
+            len: vec.len(),
         }
     }
 
@@ -332,8 +336,8 @@ impl RingBuffer {
 
                 if next_duration > current_duration {
                     let time_diff = (next_duration - current_duration).as_secs_f64();
-                    let value_diff = next_snapshot.chain_bar_progress.get_num() as f64
-                        - (snapshot.chain_bar_progress.get_num() as f64);
+                    let value_diff = next_snapshot.blocks_processed.get_num() as f64
+                        - (snapshot.blocks_processed.get_num() as f64);
 
                     let rate_of_increase = if time_diff != 0.0 {
                         value_diff / time_diff
@@ -352,6 +356,7 @@ impl RingBuffer {
                 }
             }
         }
+
         rates
     }
 
@@ -608,31 +613,31 @@ impl TuiConsole {
 
             let user_labels = self.metrics_buffer.chain_bar_progress_user_labels();
 
-            let y_max = chain_bar_window.1.max(transaction_window.1);
-            let y_min = chain_bar_window.1.min(transaction_window.1);
-            let y_avg = (y_min + y_max) / 2.0;
+            // let y_max = chain_bar_window.1.max(transaction_window.1);
+            // let y_min = chain_bar_window.1.min(transaction_window.1);
+            // let y_avg = (y_min + y_max) / 2.0;
 
-            let y_max_s = y_max.round().to_string();
-            let y_avg_s = y_avg.round().to_string();
-            let y_min_s = y_min.round().to_string();
+            // let y_max_s = y_max.round().to_string();
+            // let y_avg_s = y_avg.round().to_string();
+            // let y_min_s = y_min.round().to_string();
 
-            let chain_bar_min_s = chain_bar_window.0.round().to_string();
-            let chain_bar_max_s = chain_bar_window.1.round().to_string();
+            let chain_bar_min_s = chain_bar_window.0.to_string();
+            let chain_bar_max_s = chain_bar_window.1.to_string();
             let chain_bar_avg = (chain_bar_window.0 + chain_bar_window.1) / 2.0;
-            let chain_bar_avg_s = chain_bar_avg.round().to_string();
+            let chain_bar_avg_s = chain_bar_avg.to_string();
 
-            let tx_min_s = transaction_window.0.round().to_string();
-            let tx_max_s = transaction_window.1.round().to_string();
+            let tx_min_s = transaction_window.0.to_string();
+            let tx_max_s = transaction_window.1.to_string();
             let tx_avg = (transaction_window.0 + transaction_window.1) / 2.0;
-            let tx_avg_s = tx_avg.round().to_string();
+            let tx_avg_s = tx_avg.to_string();
 
             let chart = Chart::new(dataset_blocks)
-                .block(
-                    Block::default()
-                        .title("")
-                        .borders(Borders::NONE)
-                        .padding(Padding::new(1, 0, 0, 1)),
-                )
+                .block(Block::new().padding(Padding::new(
+                    0, // left
+                    0, // right
+                    0, // top
+                    0, // bottom
+                )))
                 .y_axis(
                     Axis::default()
                         .title("")
@@ -642,43 +647,18 @@ impl TuiConsole {
                         //     chain_bar_avg_s.as_str().bold(),
                         //     chain_bar_max_s.as_str().bold(),
                         // ])
-                        .bounds([0.0, chain_bar_window.1]),
+                        .bounds([chain_bar_window.0, chain_bar_window.1]),
                 )
-                .x_axis(
-                    Axis::default()
-                        .title("")
-                        .style(Style::default().fg(Color::Gray))
-                        .bounds([time_window.0, time_window.1]),
-                );
+                .x_axis(Axis::default().bounds([time_window.0, time_window.1]));
 
             frame.render_widget(chart, layout[2]);
 
             let chart2 = Chart::new(dataset_txs)
                 .hidden_legend_constraints((Constraint::Max(0), Constraint::Max(0)))
-                .block(
-                    Block::default()
-                        .title("")
-                        .borders(Borders::NONE)
-                        .padding(Padding::new(1, 0, 0, 1)),
-                )
                 .y_axis(
-                    Axis::default()
-                        .title("")
-                        .style(Style::default().fg(Color::Gray))
-                        .labels(vec![
-                            "0".bold(),
-                            tx_avg_s.as_str().bold(),
-                            tx_max_s.as_str().bold(),
-                        ])
-                        .labels_alignment(Alignment::Center)
-                        .bounds([0.0, transaction_window.1]),
+                    Axis::default().bounds([transaction_window.0.round(), transaction_window.1]),
                 )
-                .x_axis(
-                    Axis::default()
-                        .title("")
-                        .style(Style::default().fg(Color::Gray))
-                        .bounds([time_window.0, time_window.1]),
-                );
+                .x_axis(Axis::default().bounds([time_window.0.round(), time_window.1]));
 
             frame.render_widget(chart2, layout[2]);
 
@@ -742,6 +722,11 @@ impl TuiConsole {
                             (_, "last_block", Reading::Gauge(x)) => {
                                 if x > 0 {
                                     snapshot.chain_bar_progress.set_num(x as u64);
+                                }
+                            }
+                            (_, "blocks_processed", Reading::Count(x)) => {
+                                if x > 0 {
+                                    snapshot.blocks_processed.set_num(x as u64);
                                 }
                             }
                             // (_, "received_blocks", Reading::Count(x)) => {

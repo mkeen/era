@@ -44,6 +44,7 @@ impl Config {
             storage_ops: Default::default(),
             chain_era: Default::default(),
             last_block: Default::default(),
+            blocks_processed: Default::default(),
             ctx,
         }
     }
@@ -94,6 +95,9 @@ pub struct Stage {
 
     #[metric]
     last_block: gasket::metrics::Gauge,
+
+    #[metric]
+    blocks_processed: gasket::metrics::Counter,
 }
 
 pub struct Worker {
@@ -335,6 +339,8 @@ impl gasket::framework::Worker<Stage> for Worker {
                 redis::cmd("EXEC")
                     .query(self.connection.as_mut().unwrap())
                     .or_retry()?;
+
+                stage.blocks_processed.inc(1);
 
                 match (block_bytes, parsed_block) {
                     (Some(block_bytes), Some(parsed_block)) => {
