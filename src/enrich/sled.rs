@@ -357,7 +357,7 @@ impl gasket::framework::Worker<Stage> for Worker {
             rollback_db: Some(rollback_config.open().or_panic()?),
         };
 
-        log::warn!("finished opening enrich databases");
+        log::info!("sled: enrich databases opened");
 
         Ok(sled)
     }

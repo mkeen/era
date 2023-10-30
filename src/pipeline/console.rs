@@ -1,8 +1,10 @@
 use std::default;
 use std::ops::{Deref, DerefMut};
-use std::sync::{mpsc, Arc};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
+use chrono::{DateTime, Utc};
+use crossterm::style::Colors;
 use gasket::{
     framework::WorkerError,
     metrics::Reading,
@@ -15,7 +17,9 @@ use ratatui::widgets::{Axis, Block, BorderType, Borders, Chart, Dataset, GraphTy
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 
-use super::StageTypes;
+use crate::crosscut;
+
+use super::{Context, StageTypes};
 
 use crossterm::{
     event::{self, KeyCode, KeyEventKind},
@@ -402,26 +406,38 @@ impl TuiConsole {
         }
     }
 
-    async fn draw(&mut self, snapshot: &MetricsSnapshot) {
+    async fn draw(&mut self, ctx: Arc<Mutex<Context>>, snapshot: &MetricsSnapshot) {
         let current_era = snapshot.chain_era.get_str();
 
         let mut log_buffer_string = String::default();
         for entry in LOG_BUFFER.all().await {
-            log_buffer_string += &format!("[era] {} {}\n", entry.0, entry.1);
+            log_buffer_string += &format!("{} {}\n", entry.0, entry.1);
         }
+
+        let time_provider = crosscut::time::NaiveProvider::new(ctx).await;
+        let block_time = time_provider.slot_to_wallclock(snapshot.chain_bar_progress.get_num());
+
+        let d = SystemTime::UNIX_EPOCH + Duration::from_secs(block_time);
+        let datetime = DateTime::<Utc>::from(d);
+        let date_string = datetime
+            .format(
+                "%Y-%m-%d
+    %H:%M:%S",
+            )
+            .to_string();
 
         self.terminal.draw(|frame| {
             let layout = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints(vec![
-                    Constraint::Length(9),
-                    Constraint::Min(20),
+                    Constraint::Length(10),
+                    Constraint::Min(1),
                     Constraint::Length(1),
                     Constraint::Length(1),
-                    Constraint::Length(11),
+                    Constraint::Min(5),
                     Constraint::Length(1),
-                    Constraint::Length(3),
-                    Constraint::Length(3),
+                    Constraint::Length(1),
+                    Constraint::Length(2),
                 ])
                 .split(frame.size());
 
@@ -435,16 +451,6 @@ impl TuiConsole {
                 .constraints(vec![
                     Constraint::Length(15),
                     Constraint::Min(50),
-                    Constraint::Length(15),
-                ])
-                .split(layout[6]);
-
-            let progress_footer_layout = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints(vec![
-                    Constraint::Length(15),
-                    Constraint::Min(25),
-                    Constraint::Min(25),
                     Constraint::Length(15),
                 ])
                 .split(layout[6]);
@@ -479,10 +485,11 @@ impl TuiConsole {
             let progress = ratatui::widgets::Gauge::default()
                 .block(
                     ratatui::widgets::Block::default()
-                        .borders(Borders::ALL)
+                        .borders(Borders::NONE)
+                        .style(Style::default().bg(Color::DarkGray))
                         .padding(Padding::new(0, 0, 0, 0)),
                 )
-                .gauge_style(Style::new().light_blue())
+                .gauge_style(Style::new().blue())
                 .percent(
                     match snapshot.chain_bar_depth.get_num() > 0
                         && snapshot.chain_bar_progress.get_num() > 0
@@ -505,9 +512,9 @@ impl TuiConsole {
                         ratatui::widgets::Block::new()
                             .padding(Padding::new(
                                 3, // left
-                                3, // right
+                                1, // right
                                 2, // top
-                                2, // bottom
+                                1, // bottom
                             ))
                             .fg(Color::Blue),
                     )
@@ -518,21 +525,31 @@ impl TuiConsole {
             frame.render_widget(
                 Paragraph::new(snapshot.chain_era.get_str())
                     .block(ratatui::widgets::Block::new().padding(Padding::new(
-                        0,                             // left
-                        1,                             // right
-                        progress_layout[0].height / 2, // top
-                        0,                             // bottom
+                        0, // left
+                        1, // right
+                        0, // top
+                        0, // bottom
                     )))
                     .alignment(Alignment::Right),
                 progress_layout[0],
             );
+
+            let progress_footer_layout = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![
+                    Constraint::Length(progress_layout[0].width - 1),
+                    Constraint::Max(10),
+                    Constraint::Min(10),
+                    Constraint::Length(14),
+                ])
+                .split(layout[7]);
 
             frame.render_widget(
                 Paragraph::new(include_str!("./../../assets/boot.txt"))
                     .block(ratatui::widgets::Block::new().padding(Padding::new(
                         3, // left
                         0, // right
-                        1, // top
+                        2, // top
                         0, // bottom
                     )))
                     .alignment(Alignment::Left),
@@ -554,23 +571,44 @@ impl TuiConsole {
                     snapshot.reducer_status.get_str(),
                     snapshot.storage_status.get_str()
                 ))
-                .block(
-                    ratatui::widgets::Block::new()
-                        .padding(Padding::new(
-                            3, // left
-                            0, // right
-                            1, // top
-                            0, // bottom
-                        ))
-                        .borders(Borders::LEFT)
-                        .border_type(BorderType::Plain),
-                )
+                .block(ratatui::widgets::Block::new().padding(Padding::new(
+                    1, // left
+                    0, // right
+                    2, // top
+                    0, // bottom
+                )))
                 .alignment(Alignment::Left),
                 top_status_layout[1],
             );
 
+            // frame.render_widget(
+            //     Paragraph::new(snapshot.chain_bar_progress.get_str())
+            //         .block(Block::new().padding(Padding::new(
+            //             0, // left
+            //             0, // right
+            //             0, // top
+            //             0, // bottom
+            //         )))
+            //         .alignment(Alignment::Left),
+            //     progress_footer_layout[0],
+            // );
+
+            frame.render_widget(progress, progress_layout[1]);
+
             frame.render_widget(
-                Paragraph::new(snapshot.chain_bar_progress.get_str())
+                Paragraph::new(snapshot.chain_bar_depth.get_num().to_string().as_str())
+                    .block(Block::new().padding(Padding::new(
+                        1, // left
+                        0, // right
+                        0, // top
+                        0, // bottom
+                    )))
+                    .alignment(Alignment::Left),
+                progress_layout[2],
+            );
+
+            frame.render_widget(
+                Paragraph::new(date_string)
                     .block(Block::new().padding(Padding::new(
                         1, // left
                         0, // right
@@ -579,20 +617,6 @@ impl TuiConsole {
                     )))
                     .alignment(Alignment::Left),
                 progress_footer_layout[1],
-            );
-
-            frame.render_widget(progress, progress_layout[1]);
-
-            frame.render_widget(
-                Paragraph::new(snapshot.chain_bar_depth.get_num().to_string().as_str())
-                    .block(Block::new().padding(Padding::new(
-                        1,                             // left
-                        0,                             // right
-                        progress_layout[0].height / 2, // top
-                        0,                             // bottom
-                    )))
-                    .alignment(Alignment::Left),
-                progress_layout[2],
             );
 
             // frame.render_widget(
@@ -620,14 +644,14 @@ impl TuiConsole {
             let transaction_window = self.metrics_buffer.window_for_snapshot_prop("transactions");
 
             let dataset_blocks = vec![Dataset::default()
-                .name("Blocks")
+                .name("")
                 .marker(symbols::Marker::Braille)
                 .style(Style::default().fg(Color::Cyan))
                 .graph_type(GraphType::Line)
                 .data(&chain_bar_progress_metrics)];
 
             let dataset_txs = vec![Dataset::default()
-                .name("Transactions")
+                .name("")
                 .marker(symbols::Marker::Braille)
                 .style(Style::default().fg(Color::Green))
                 .graph_type(GraphType::Line)
@@ -742,7 +766,7 @@ impl TuiConsole {
             );
 
             frame.render_widget(
-                Paragraph::new("◼ Blocks")
+                Paragraph::new("▄ Blocks")
                     .block(
                         ratatui::widgets::Block::new()
                             .padding(Padding::new(
@@ -758,7 +782,7 @@ impl TuiConsole {
             );
 
             frame.render_widget(
-                Paragraph::new("Transactions ◼")
+                Paragraph::new("Transactions ▄")
                     .block(
                         ratatui::widgets::Block::new()
                             .padding(Padding::new(
@@ -812,7 +836,11 @@ impl TuiConsole {
         });
     }
 
-    async fn refresh(&mut self, pipeline: &super::Pipeline) -> Result<(), WorkerError> {
+    async fn refresh(
+        &mut self,
+        ctx: Arc<Mutex<Context>>,
+        pipeline: &super::Pipeline,
+    ) -> Result<(), WorkerError> {
         let mut snapshot = MetricsSnapshot::default();
         snapshot.timestamp = Instant::now().duration_since(self.metrics_buffer.base_time);
 
@@ -929,7 +957,9 @@ impl TuiConsole {
             };
         }
 
-        self.draw(&snapshot).await;
+        // Clean up
+
+        self.draw(ctx, &snapshot).await;
         self.metrics_buffer.push(snapshot);
 
         Ok(())
@@ -1065,9 +1095,13 @@ pub async fn initialize(mode: Option<Mode>) {
         .unwrap();
 }
 
-pub async fn refresh(mode: &Option<Mode>, pipeline: &super::Pipeline) -> Result<(), WorkerError> {
+pub async fn refresh(
+    ctx: Arc<Mutex<Context>>,
+    mode: &Option<Mode>,
+    pipeline: &super::Pipeline,
+) -> Result<(), WorkerError> {
     let mode = match mode {
-        Some(Mode::TUI) => TUI_CONSOLE.lock().await.refresh(pipeline).await,
+        Some(Mode::TUI) => TUI_CONSOLE.lock().await.refresh(ctx, pipeline).await,
         _ => PLAIN_CONSOLE.refresh(pipeline),
     };
 

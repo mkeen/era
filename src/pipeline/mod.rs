@@ -70,7 +70,7 @@ impl gasket::framework::Worker<Stage> for Pipeline {
             tethers: Default::default(),
         };
 
-        console::refresh(&stage.args_console, &pipe).await?;
+        console::refresh(stage.ctx.clone(), &stage.args_console, &pipe).await?;
 
         let enrich = stage.enrich_config.clone().unwrap();
 
@@ -158,7 +158,7 @@ impl gasket::framework::Worker<Stage> for Pipeline {
     }
 
     async fn execute(&mut self, _: &(), stage: &mut Stage) -> Result<(), WorkerError> {
-        console::refresh(&stage.args_console, self).await
+        console::refresh(stage.ctx.clone(), &stage.args_console, self).await
     }
 }
 
