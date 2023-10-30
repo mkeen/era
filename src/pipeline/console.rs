@@ -1,8 +1,7 @@
-use std::collections::VecDeque;
 use std::default;
-use std::f32::INFINITY;
 use std::ops::{Deref, DerefMut};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
 
 use gasket::{
     framework::WorkerError,
@@ -12,8 +11,8 @@ use gasket::{
 use lazy_static::{__Deref, lazy_static};
 use log::Log;
 use ratatui::prelude::Layout;
-use ratatui::widgets::canvas::Label;
 use ratatui::widgets::{Axis, Block, BorderType, Borders, Chart, Dataset, GraphType, Padding};
+use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 
 use super::StageTypes;
@@ -168,6 +167,11 @@ impl MetricsSnapshot {
     }
 }
 
+struct LogBuffer {
+    vec: Arc<Mutex<Vec<(String, String)>>>,
+    capacity: usize,
+}
+
 pub struct BlockGraph {
     vec: Vec<MetricsSnapshot>,
     base_time: Instant,
@@ -175,8 +179,32 @@ pub struct BlockGraph {
     last_dropped: Option<MetricsSnapshot>,
 }
 
+impl LogBuffer {
+    pub fn new(capacity: usize) -> Self {
+        let base_time = Instant::now();
+
+        Self {
+            vec: Arc::new(Mutex::new(vec![])),
+            capacity,
+        }
+    }
+
+    pub async fn push(&mut self, ele: (String, String)) {
+        let mut v = self.vec.lock().await;
+        if v.len() == self.capacity {
+            v.remove(0);
+        }
+
+        v.push(ele.clone());
+    }
+
+    pub async fn all(&self) -> Vec<(String, String)> {
+        self.vec.lock().await.clone()
+    }
+}
+
 impl BlockGraph {
-    pub fn new(capacity: usize) -> BlockGraph {
+    pub fn new(capacity: usize) -> Self {
         let base_time = Instant::now();
         let mut vec: Vec<MetricsSnapshot> = Vec::default();
 
@@ -374,8 +402,13 @@ impl TuiConsole {
         }
     }
 
-    fn draw(&mut self, snapshot: &MetricsSnapshot) {
+    async fn draw(&mut self, snapshot: &MetricsSnapshot) {
         let current_era = snapshot.chain_era.get_str();
+
+        let mut log_buffer_string = String::default();
+        for entry in LOG_BUFFER.all().await {
+            log_buffer_string += &format!("[era] {} {}\n", entry.0, entry.1);
+        }
 
         self.terminal.draw(|frame| {
             let layout = Layout::default()
@@ -383,7 +416,10 @@ impl TuiConsole {
                 .constraints(vec![
                     Constraint::Length(9),
                     Constraint::Min(20),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
                     Constraint::Length(11),
+                    Constraint::Length(1),
                     Constraint::Length(3),
                     Constraint::Length(3),
                 ])
@@ -401,7 +437,7 @@ impl TuiConsole {
                     Constraint::Min(50),
                     Constraint::Length(15),
                 ])
-                .split(layout[3]);
+                .split(layout[6]);
 
             let progress_footer_layout = Layout::default()
                 .direction(Direction::Horizontal)
@@ -411,7 +447,7 @@ impl TuiConsole {
                     Constraint::Min(25),
                     Constraint::Length(15),
                 ])
-                .split(layout[4]);
+                .split(layout[6]);
 
             let mixed_chart_layout = Layout::default()
                 .direction(Direction::Horizontal)
@@ -420,7 +456,7 @@ impl TuiConsole {
                     Constraint::Min(10),
                     Constraint::Max(7),
                 ])
-                .split(layout[2]);
+                .split(layout[4]);
 
             let chart_blocks_axis = Layout::default()
                 .direction(Direction::Vertical)
@@ -464,6 +500,22 @@ impl TuiConsole {
             //frame.render_widget(bottom_pane, layout[0]);
 
             frame.render_widget(
+                Paragraph::new(log_buffer_string)
+                    .block(
+                        ratatui::widgets::Block::new()
+                            .padding(Padding::new(
+                                3, // left
+                                3, // right
+                                2, // top
+                                2, // bottom
+                            ))
+                            .fg(Color::Blue),
+                    )
+                    .alignment(Alignment::Left),
+                layout[1],
+            );
+
+            frame.render_widget(
                 Paragraph::new(snapshot.chain_era.get_str())
                     .block(ratatui::widgets::Block::new().padding(Padding::new(
                         0,                             // left
@@ -496,7 +548,7 @@ impl TuiConsole {
 
             frame.render_widget(
                 Paragraph::new(format!(
-                    "Source: {}\nEnrich: {}\nReduce: {}\nStorage: {}",
+                    "{} Source\n{} Enrich\n{} Reduce\n{} Storage",
                     snapshot.sources_status.get_str(),
                     snapshot.enrich_status.get_str(),
                     snapshot.reducer_status.get_str(),
@@ -543,16 +595,16 @@ impl TuiConsole {
                 progress_layout[2],
             );
 
-            frame.render_widget(
-                Paragraph::new(format!(
-                    "{:?}\n{:?}\n{:?}",
-                    self.metrics_buffer.window_for_snapshot_prop("transactions"),
-                    self.metrics_buffer
-                        .window_for_snapshot_prop("blocks_processed"),
-                    self.metrics_buffer.timestamp_window(),
-                )),
-                layout[1],
-            );
+            // frame.render_widget(
+            //     Paragraph::new(format!(
+            //         "{:?}\n{:?}\n{:?}",
+            //         self.metrics_buffer.window_for_snapshot_prop("transactions"),
+            //         self.metrics_buffer
+            //             .window_for_snapshot_prop("blocks_processed"),
+            //         self.metrics_buffer.timestamp_window(),
+            //     )),
+            //     layout[1],
+            // );
 
             let chain_bar_progress_metrics = self
                 .metrics_buffer
@@ -637,6 +689,90 @@ impl TuiConsole {
                 chart_tx_axis[2],
             );
 
+            let chart_legend_struts = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![
+                    Constraint::Length(mixed_chart_layout[0].width + 1),
+                    Constraint::Min(10),
+                    Constraint::Length(mixed_chart_layout[2].width + 1),
+                ])
+                .split(layout[3]);
+
+            let chart_legend_labels = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![
+                    Constraint::Length(mixed_chart_layout[0].width + 8),
+                    Constraint::Min(10),
+                    Constraint::Length(mixed_chart_layout[2].width + 14),
+                ])
+                .split(layout[2]);
+
+            frame.render_widget(
+                Paragraph::new("")
+                    .block(
+                        ratatui::widgets::Block::new()
+                            .padding(Padding::new(
+                                0, // left
+                                0, // right
+                                0, // top
+                                0, // bottom
+                            ))
+                            .borders(Borders::RIGHT)
+                            .border_style(Style::default().fg(Color::Blue)),
+                    )
+                    .alignment(Alignment::Right),
+                chart_legend_struts[0],
+            );
+
+            frame.render_widget(
+                Paragraph::new("")
+                    .block(
+                        ratatui::widgets::Block::new()
+                            .padding(Padding::new(
+                                0, // left
+                                0, // right
+                                0, // top
+                                0, // bottom
+                            ))
+                            .borders(Borders::LEFT)
+                            .border_style(Style::default().fg(Color::Green)),
+                    )
+                    .alignment(Alignment::Right),
+                chart_legend_struts[2],
+            );
+
+            frame.render_widget(
+                Paragraph::new("◼ Blocks")
+                    .block(
+                        ratatui::widgets::Block::new()
+                            .padding(Padding::new(
+                                0, // left
+                                0, // right
+                                0, // top
+                                0, // bottom
+                            ))
+                            .fg(Color::Blue),
+                    )
+                    .alignment(Alignment::Right),
+                chart_legend_labels[0],
+            );
+
+            frame.render_widget(
+                Paragraph::new("Transactions ◼")
+                    .block(
+                        ratatui::widgets::Block::new()
+                            .padding(Padding::new(
+                                0, // left
+                                0, // right
+                                0, // top
+                                0, // bottom
+                            ))
+                            .fg(Color::Green),
+                    )
+                    .alignment(Alignment::Left),
+                chart_legend_labels[2],
+            );
+
             let chart = Chart::new(dataset_blocks)
                 .block(
                     Block::new()
@@ -676,7 +812,7 @@ impl TuiConsole {
         });
     }
 
-    fn refresh(&mut self, pipeline: &super::Pipeline) -> Result<(), WorkerError> {
+    async fn refresh(&mut self, pipeline: &super::Pipeline) -> Result<(), WorkerError> {
         let mut snapshot = MetricsSnapshot::default();
         snapshot.timestamp = Instant::now().duration_since(self.metrics_buffer.base_time);
 
@@ -697,9 +833,9 @@ impl TuiConsole {
                 TetherState::Dropped => "dropped!",
                 TetherState::Blocked(_) => "blocked",
                 TetherState::Alive(a) => match a {
-                    StagePhase::Bootstrap => "bootstrapping",
-                    StagePhase::Working => "working",
-                    StagePhase::Teardown => "tearing down",
+                    StagePhase::Bootstrap => "⚠",
+                    StagePhase::Working => "⚙",
+                    StagePhase::Teardown => "⚠",
                     StagePhase::Ended => "ended",
                 },
             };
@@ -793,7 +929,7 @@ impl TuiConsole {
             };
         }
 
-        self.draw(&snapshot);
+        self.draw(&snapshot).await;
         self.metrics_buffer.push(snapshot);
 
         Ok(())
@@ -806,8 +942,16 @@ impl Log for TuiConsole {
     }
 
     fn log(&self, record: &log::Record) {
-        // self.chainsync_progress
-        //     .set_message(format!("{}", record.args()))
+        let r = record.clone();
+        let s = (r.level().to_string(), r.args().to_string());
+
+        tokio::task::spawn(async move {
+            let mut buffer = LOG_BUFFER.vec.lock().await;
+            if buffer.len() == LOG_BUFFER.capacity {
+                buffer.remove(0);
+            }
+            buffer.push(s);
+        });
     }
 
     fn flush(&self) {}
@@ -904,6 +1048,12 @@ lazy_static! {
     static ref PLAIN_CONSOLE: PlainConsole = PlainConsole::new();
 }
 
+lazy_static! {
+    static ref LOG_BUFFER: LogBuffer = LogBuffer {
+        vec: Arc::new(Mutex::new(Vec::new())),
+        capacity: 100,
+    };
+}
 pub async fn initialize(mode: Option<Mode>) {
     let logger = match mode {
         Some(Mode::TUI) => Logger::Tui(TuiConsole::new()),
@@ -917,7 +1067,7 @@ pub async fn initialize(mode: Option<Mode>) {
 
 pub async fn refresh(mode: &Option<Mode>, pipeline: &super::Pipeline) -> Result<(), WorkerError> {
     let mode = match mode {
-        Some(Mode::TUI) => TUI_CONSOLE.lock().await.refresh(pipeline),
+        Some(Mode::TUI) => TUI_CONSOLE.lock().await.refresh(pipeline).await,
         _ => PLAIN_CONSOLE.refresh(pipeline),
     };
 

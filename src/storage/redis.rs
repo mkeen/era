@@ -346,19 +346,13 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                 stage.blocks_processed.inc(1);
 
-                match (block_bytes, parsed_block) {
+                let result = match (block_bytes, parsed_block) {
                     (Some(block_bytes), Some(parsed_block)) => {
                         stage
                             .transactions_finalized
                             .inc(parsed_block.txs().len() as u64);
 
                         stage.last_block.set(parsed_block.number() as i64);
-
-                        log::debug!(
-                            "new cursor saved to redis {} {}",
-                            &stage.config.cursor_key(),
-                            &cursor_str
-                        );
 
                         if *rollback {
                             stage.ctx.lock().await.block_buffer.remove_block(&point);
@@ -377,7 +371,18 @@ impl gasket::framework::Worker<Stage> for Worker {
                         stage.chain_era.set(string_to_i64("Byron".to_string()));
                         Ok(())
                     }
-                }
+                };
+
+                log::info!(
+                    "rolled {} to {}",
+                    match rollback {
+                        true => "backward",
+                        false => "forward",
+                    },
+                    cursor_str
+                );
+
+                result
             }
         }
     }

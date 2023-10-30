@@ -231,7 +231,6 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                             match n {
                                 NextResponse::RollForward(cbor, t) => {
-                                    log::warn!("rolling forward with chain");
                                     WorkSchedule::Unit(vec![RawBlockPayload::RollForward(cbor.0)])
                                 }
                                 NextResponse::RollBackward(p, t) => {
