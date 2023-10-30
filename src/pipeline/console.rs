@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+use std::default;
 use std::f32::INFINITY;
 use std::ops::{Deref, DerefMut};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -10,6 +12,7 @@ use gasket::{
 use lazy_static::{__Deref, lazy_static};
 use log::Log;
 use ratatui::prelude::Layout;
+use ratatui::widgets::canvas::Label;
 use ratatui::widgets::{Axis, Block, BorderType, Borders, Chart, Dataset, GraphType, Padding};
 use tokio::sync::Mutex;
 
@@ -37,7 +40,7 @@ impl Default for Mode {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct MeteredNumber {
     value: u64,
 }
@@ -54,7 +57,7 @@ impl MeteredNumber {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct MeteredString {
     value: String,
 }
@@ -73,7 +76,15 @@ impl MeteredString {
     }
 }
 
-#[derive(Clone)]
+impl From<&str> for MeteredString {
+    fn from(item: &str) -> Self {
+        MeteredString {
+            value: item.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 enum MeteredValue {
     Numerical(MeteredNumber),
     Label(MeteredString),
@@ -113,296 +124,211 @@ impl MeteredValue {
     }
 }
 
-pub struct CollectedSnapshotRates {
-    chain_bar_progress: f64,
-    transactions: f64,
-}
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MetricsSnapshot {
-    timestamp: SystemTime,
+    timestamp: Duration,
     chain_bar_depth: MeteredValue,
     chain_bar_progress: MeteredValue,
     blocks_processed: MeteredValue,
     transactions: MeteredValue,
     chain_era: MeteredValue,
-    sources_status: String,
-    enrich_status: String,
-    reducer_status: String,
-    storage_status: String,
+    sources_status: MeteredValue,
+    enrich_status: MeteredValue,
+    reducer_status: MeteredValue,
+    storage_status: MeteredValue,
 }
 
 impl Default for MetricsSnapshot {
     fn default() -> Self {
         Self {
-            timestamp: SystemTime::now(),
+            timestamp: Default::default(),
             chain_era: MeteredValue::Label(Default::default()),
             chain_bar_depth: MeteredValue::Numerical(Default::default()),
             chain_bar_progress: MeteredValue::Numerical(Default::default()),
             blocks_processed: MeteredValue::Numerical(Default::default()),
             transactions: MeteredValue::Numerical(Default::default()),
-            sources_status: "uninitialized".into(),
-            enrich_status: "uninitialized".into(),
-            reducer_status: "uninitialized".into(),
-            storage_status: "uninitialized".into(),
+            sources_status: MeteredValue::Label(Default::default()),
+            enrich_status: MeteredValue::Label(Default::default()),
+            reducer_status: MeteredValue::Label(Default::default()),
+            storage_status: MeteredValue::Label(Default::default()),
         }
     }
 }
 
 impl MetricsSnapshot {
-    fn indexed_stub(idx: usize, ring_depth: usize, timestamp: SystemTime) -> Self {
-        let mut timestamp = timestamp;
-
-        if idx + 1 != ring_depth {
-            timestamp = timestamp - Duration::from_secs(1);
+    fn get_metrics_key(&self, prop_name: &str) -> Option<MeteredValue> {
+        match prop_name {
+            "chain_era" => Some(self.chain_era.clone()),
+            "chain_bar_depth" => Some(self.chain_bar_depth.clone()),
+            "chain_bar_progress" => Some(self.chain_bar_progress.clone()),
+            "blocks_processed" => Some(self.blocks_processed.clone()),
+            "transactions" => Some(self.transactions.clone()),
+            _ => None,
         }
+    }
+}
+
+pub struct BlockGraph {
+    vec: Vec<MetricsSnapshot>,
+    base_time: Instant,
+    capacity: usize,
+    last_dropped: Option<MetricsSnapshot>,
+}
+
+impl BlockGraph {
+    pub fn new(capacity: usize) -> BlockGraph {
+        let base_time = Instant::now();
+        let mut vec: Vec<MetricsSnapshot> = Vec::default();
 
         Self {
-            timestamp,
-            chain_era: MeteredValue::Label(Default::default()),
-            chain_bar_depth: MeteredValue::Numerical(Default::default()),
-            chain_bar_progress: MeteredValue::Numerical(Default::default()),
-            blocks_processed: MeteredValue::Numerical(Default::default()),
-            transactions: MeteredValue::Numerical(Default::default()),
-            sources_status: "uninitialized".into(),
-            enrich_status: "uninitialized".into(),
-            reducer_status: "uninitialized".into(),
-            storage_status: "uninitialized".into(),
-        }
-    }
-
-    pub fn set_timestamp(&mut self, val: SystemTime) -> &mut Self {
-        self.timestamp = val;
-        self
-    }
-}
-
-pub struct RingBuffer {
-    vec: Vec<MetricsSnapshot>,
-    capacity: usize,
-    start: usize,
-    len: usize,
-}
-
-impl RingBuffer {
-    pub fn new(ring_depth: usize) -> RingBuffer {
-        let now = SystemTime::now();
-        let mut vec = Vec::with_capacity(ring_depth);
-        for i in 0..ring_depth {
-            let element = MetricsSnapshot::indexed_stub(i, ring_depth, now);
-            vec.push(element);
-        }
-
-        RingBuffer {
-            vec: vec.clone(),
-            capacity: ring_depth,
-            start: 0,
-            len: vec.len(),
+            vec,
+            base_time,
+            capacity,
+            last_dropped: None,
         }
     }
 
     pub fn push(&mut self, ele: MetricsSnapshot) {
-        if self.len < self.capacity {
-            self.vec.push(ele);
-            self.len += 1;
-        } else {
-            self.vec[self.start] = ele.clone();
-            self.start = (self.start + 1) % self.capacity;
+        if self.vec.len() == self.capacity {
+            self.last_dropped = Some(self.vec[0].clone());
+            self.vec.remove(0);
         }
+
+        self.vec.push(ele);
     }
 
-    pub fn get(&self, index: usize) -> Option<&MetricsSnapshot> {
-        if index < self.len {
-            Some(&self.vec[(self.start + index) % self.capacity])
-        } else {
-            None
-        }
+    pub fn get(&self, index: usize) -> &MetricsSnapshot {
+        self.vec.get(index).unwrap()
     }
 
     pub fn timestamp_window(&self) -> (f64, f64) {
-        let mut min: f64 = 0.0;
-        let mut max: f64 = 0.0;
+        let mut min: Duration = Default::default();
+        let mut max: Duration = Default::default();
 
-        for i in 0..self.len {
-            if let Some(snapshot) = self.get(i) {
-                if min == 0.0 {
-                    min = snapshot
-                        .timestamp
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs_f64();
-                }
+        for snapshot in self.vec.clone() {
+            let current = snapshot.timestamp;
 
-                if snapshot
-                    .timestamp
-                    .duration_since(UNIX_EPOCH)
+            if current < min || min == Default::default() {
+                min = current;
+            }
+
+            if current > max {
+                max = current;
+            }
+        }
+
+        (min.as_secs_f64(), max.as_secs_f64())
+    }
+
+    fn get_prop_value_for_index(&self, prop_name: &str, vec_idx: usize) -> Option<MeteredValue> {
+        match self.vec.get(vec_idx) {
+            Some(snapshot) => match snapshot.get_metrics_key(prop_name) {
+                Some(metrics_value) => Some(metrics_value),
+                None => None,
+            },
+            None => None,
+        }
+    }
+
+    pub fn rates_for_snapshot_prop(&self, prop_name: &str) -> [(f64, f64); RING_DEPTH] {
+        let mut rates: Vec<(f64, f64)> = Default::default();
+
+        let mut stub_metrics_snapshot: MetricsSnapshot = Default::default();
+        stub_metrics_snapshot.timestamp = match self.vec.clone().get(0) {
+            Some(s) => s
+                .timestamp
+                .clone()
+                .checked_sub(Duration::from_millis(1000))
+                .unwrap_or(Duration::default()),
+            _ => stub_metrics_snapshot.timestamp,
+        };
+
+        let last_dropped = match self.last_dropped.clone() {
+            Some(previous_snapshot) => previous_snapshot,
+            None => stub_metrics_snapshot,
+        };
+
+        for (i, current_snapshot) in self.vec.clone().into_iter().enumerate() {
+            let previous_snapshot = if i > 0 {
+                self.vec.get(i - 1).unwrap().clone()
+            } else {
+                last_dropped.clone()
+            };
+
+            let previous_duration = previous_snapshot.timestamp;
+            let current_duration = current_snapshot.timestamp;
+
+            let previous_value = if i > 0 {
+                self.get_prop_value_for_index(prop_name, i - 1)
+                    .unwrap_or(MeteredValue::Numerical(MeteredNumber { value: 0 }))
+                    .get_num()
+            } else {
+                previous_snapshot
+                    .get_metrics_key(prop_name)
                     .unwrap()
-                    .as_secs_f64()
-                    < min
-                {
-                    min = snapshot
-                        .timestamp
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs_f64();
-                }
+                    .get_num()
+            };
 
-                if snapshot
-                    .timestamp
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs_f64()
-                    > max
-                {
-                    max = snapshot
-                        .timestamp
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs_f64();
-                }
+            let current_value = self
+                .get_prop_value_for_index(prop_name, i)
+                .unwrap()
+                .get_num();
+
+            let time_diff = if current_duration > previous_duration {
+                (current_duration - previous_duration).as_secs_f64()
+            } else {
+                0.0
+            };
+
+            let value_diff = current_value - previous_value;
+
+            let rate_of_increase = if time_diff > 0.0 && value_diff > 0 {
+                value_diff as f64 / time_diff
+            } else {
+                0.0
+            };
+
+            rates.push((current_snapshot.timestamp.as_secs_f64(), rate_of_increase));
+        }
+
+        let mut final_rates: [(f64, f64); RING_DEPTH] = [(0.0, 0.0); RING_DEPTH];
+
+        for (i, _) in final_rates.clone().iter().enumerate() {
+            if i + 1 <= rates.len() {
+                final_rates[i] = rates[i];
             }
         }
 
-        (min, max)
+        final_rates
     }
 
-    pub fn transaction_rate(&self) -> [(f64, f64); RING_DEPTH] {
-        let mut rates = [(0.0, 0.0); RING_DEPTH];
-        for i in 0..self.len {
-            if let Some(snapshot) = self.get(i) {
-                let next_snapshot = self.get((i + 1) % self.len).unwrap_or(snapshot);
-
-                let next_duration = next_snapshot.timestamp.duration_since(UNIX_EPOCH).unwrap();
-                let current_duration = snapshot.timestamp.duration_since(UNIX_EPOCH).unwrap();
-
-                if next_duration > current_duration {
-                    let time_diff = (next_duration - current_duration).as_secs_f64();
-                    let value_diff = next_snapshot.transactions.get_num() as f64
-                        - (snapshot.transactions.get_num() as f64);
-
-                    let rate_of_increase = if time_diff != 0.0 {
-                        value_diff / time_diff
-                    } else {
-                        0.0
-                    };
-
-                    rates[i] = (
-                        snapshot
-                            .timestamp
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs_f64(),
-                        rate_of_increase,
-                    );
-                }
-            }
-        }
-        rates
-    }
-
-    pub fn transaction_rate_window(&self) -> (f64, f64) {
+    pub fn window_for_snapshot_prop(&self, prop_name: &str) -> (f64, f64) {
         let mut min: f64 = 0.0;
         let mut max: f64 = 0.0;
 
-        let transaction_rate = self.transaction_rate();
+        let prop_rates = self.rates_for_snapshot_prop(prop_name);
 
-        for i in 0..transaction_rate.len() {
-            if let Some(snapshot) = transaction_rate.get(i) {
-                if min == 0.0 {
-                    min = snapshot.1;
-                }
+        for snapshot in prop_rates {
+            if min == 0.0 {
+                min = snapshot.1;
+            }
 
-                if (snapshot.1) < min {
-                    min = snapshot.1;
-                }
+            if (snapshot.1) < min {
+                min = snapshot.1;
+            }
 
-                if (snapshot.1) > max {
-                    max = snapshot.1;
-                }
+            if (snapshot.1) > max {
+                max = snapshot.1;
             }
         }
 
         (min, max)
-    }
-
-    pub fn chain_bar_progress_rates(&self) -> [(f64, f64); RING_DEPTH] {
-        let mut rates = [(0.0, 0.0); RING_DEPTH];
-        for i in 0..self.len {
-            if let Some(snapshot) = self.get(i) {
-                let next_snapshot = self.get((i + 1) % self.len).unwrap_or(snapshot);
-
-                let next_duration = next_snapshot.timestamp.duration_since(UNIX_EPOCH).unwrap();
-                let current_duration = snapshot.timestamp.duration_since(UNIX_EPOCH).unwrap();
-
-                if next_duration > current_duration {
-                    let time_diff = (next_duration - current_duration).as_secs_f64();
-                    let value_diff = next_snapshot.blocks_processed.get_num() as f64
-                        - (snapshot.blocks_processed.get_num() as f64);
-
-                    let rate_of_increase = if time_diff != 0.0 {
-                        value_diff / time_diff
-                    } else {
-                        0.0
-                    };
-
-                    rates[i] = (
-                        snapshot
-                            .timestamp
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs_f64(),
-                        rate_of_increase,
-                    );
-                }
-            }
-        }
-
-        rates
-    }
-
-    pub fn chain_bar_progress_window(&self) -> (f64, f64) {
-        let mut min: f64 = 0.0;
-        let mut max: f64 = 0.0;
-
-        let chain_bar_progress_rates = self.chain_bar_progress_rates();
-
-        for i in 0..chain_bar_progress_rates.len() {
-            if let Some(snapshot) = chain_bar_progress_rates.get(i) {
-                if min == 0.0 {
-                    min = snapshot.1;
-                }
-
-                if (snapshot.1) < min {
-                    min = snapshot.1;
-                }
-
-                if (snapshot.1) > max {
-                    max = snapshot.1;
-                }
-            }
-        }
-
-        (min, max)
-    }
-
-    pub fn chain_bar_progress_user_labels(&self) -> Vec<String> {
-        let mut labels = vec!["".to_string(); 3];
-
-        let progress_window = self.chain_bar_progress_window();
-
-        labels[0] = progress_window.0.round().to_string();
-        labels[1] = ((progress_window.0 + progress_window.1) / 2.0)
-            .round()
-            .to_string();
-        labels[2] = progress_window.1.round().to_string();
-
-        labels
     }
 }
 
 struct TuiConsole {
     terminal: Terminal<CrosstermBackend<Stdout>>,
-    metrics_buffer: RingBuffer,
+    metrics_buffer: BlockGraph,
 }
 
 impl Deref for TuiConsole {
@@ -444,11 +370,11 @@ impl TuiConsole {
         enable_raw_mode().unwrap();
         Self {
             terminal: Terminal::new(CrosstermBackend::new(stdout())).unwrap(),
-            metrics_buffer: RingBuffer::new(RING_DEPTH),
+            metrics_buffer: BlockGraph::new(RING_DEPTH),
         }
     }
 
-    fn draw(&mut self, snapshot: MetricsSnapshot) {
+    fn draw(&mut self, snapshot: &MetricsSnapshot) {
         let current_era = snapshot.chain_era.get_str();
 
         self.terminal.draw(|frame| {
@@ -485,7 +411,34 @@ impl TuiConsole {
                     Constraint::Min(25),
                     Constraint::Length(15),
                 ])
+                .split(layout[4]);
+
+            let mixed_chart_layout = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![
+                    Constraint::Max(7),
+                    Constraint::Min(10),
+                    Constraint::Max(7),
+                ])
                 .split(layout[2]);
+
+            let chart_blocks_axis = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(vec![
+                    Constraint::Percentage(48),
+                    Constraint::Min(1),
+                    Constraint::Max(1),
+                ])
+                .split(mixed_chart_layout[0]);
+
+            let chart_tx_axis = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(vec![
+                    Constraint::Percentage(48),
+                    Constraint::Min(1),
+                    Constraint::Max(1),
+                ])
+                .split(mixed_chart_layout[2]);
 
             let progress = ratatui::widgets::Gauge::default()
                 .block(
@@ -534,20 +487,20 @@ impl TuiConsole {
                 top_status_layout[0],
             );
 
-            frame.render_widget(
-                Paragraph::new("hi")
-                    .block(ratatui::widgets::Block::new())
-                    .alignment(Alignment::Left),
-                layout[1],
-            );
+            // frame.render_widget(
+            //     Paragraph::new("hi")
+            //         .block(ratatui::widgets::Block::new())
+            //         .alignment(Alignment::Left),
+            //     layout[1],
+            // );
 
             frame.render_widget(
                 Paragraph::new(format!(
                     "Source: {}\nEnrich: {}\nReduce: {}\nStorage: {}",
-                    snapshot.sources_status,
-                    snapshot.enrich_status,
-                    snapshot.reducer_status,
-                    snapshot.storage_status
+                    snapshot.sources_status.get_str(),
+                    snapshot.enrich_status.get_str(),
+                    snapshot.reducer_status.get_str(),
+                    snapshot.storage_status.get_str()
                 ))
                 .block(
                     ratatui::widgets::Block::new()
@@ -590,12 +543,29 @@ impl TuiConsole {
                 progress_layout[2],
             );
 
-            let chain_bar_progress_metrics = self.metrics_buffer.chain_bar_progress_rates();
-            let chain_bar_window = self.metrics_buffer.chain_bar_progress_window();
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "{:?}\n{:?}\n{:?}",
+                    self.metrics_buffer.window_for_snapshot_prop("transactions"),
+                    self.metrics_buffer
+                        .window_for_snapshot_prop("blocks_processed"),
+                    self.metrics_buffer.timestamp_window(),
+                )),
+                layout[1],
+            );
+
+            let chain_bar_progress_metrics = self
+                .metrics_buffer
+                .rates_for_snapshot_prop("blocks_processed");
+
+            let chain_bar_window = self
+                .metrics_buffer
+                .window_for_snapshot_prop("blocks_processed");
+
             let time_window = self.metrics_buffer.timestamp_window();
 
-            let transaction_metrics = self.metrics_buffer.transaction_rate();
-            let transaction_window = self.metrics_buffer.transaction_rate_window();
+            let transaction_metrics = self.metrics_buffer.rates_for_snapshot_prop("transactions");
+            let transaction_window = self.metrics_buffer.window_for_snapshot_prop("transactions");
 
             let dataset_blocks = vec![Dataset::default()
                 .name("Blocks")
@@ -611,8 +581,6 @@ impl TuiConsole {
                 .graph_type(GraphType::Line)
                 .data(&transaction_metrics)];
 
-            let user_labels = self.metrics_buffer.chain_bar_progress_user_labels();
-
             // let y_max = chain_bar_window.1.max(transaction_window.1);
             // let y_min = chain_bar_window.1.min(transaction_window.1);
             // let y_avg = (y_min + y_max) / 2.0;
@@ -621,46 +589,87 @@ impl TuiConsole {
             // let y_avg_s = y_avg.round().to_string();
             // let y_min_s = y_min.round().to_string();
 
-            let chain_bar_min_s = chain_bar_window.0.to_string();
-            let chain_bar_max_s = chain_bar_window.1.to_string();
-            let chain_bar_avg = (chain_bar_window.0 + chain_bar_window.1) / 2.0;
-            let chain_bar_avg_s = chain_bar_avg.to_string();
+            let chain_bar_min_s = chain_bar_window.0.round().to_string();
+            let chain_bar_max_s = chain_bar_window.1.round().to_string();
+            let chain_bar_avg = (chain_bar_window.0.round() + chain_bar_window.1.round()) / 2.0;
+            let chain_bar_avg_s = chain_bar_avg.round().to_string();
 
-            let tx_min_s = transaction_window.0.to_string();
-            let tx_max_s = transaction_window.1.to_string();
-            let tx_avg = (transaction_window.0 + transaction_window.1) / 2.0;
-            let tx_avg_s = tx_avg.to_string();
+            let tx_min_s = transaction_window.0.round().to_string();
+            let tx_max_s = transaction_window.1.round().to_string();
+            let tx_avg = (transaction_window.0.round() + transaction_window.1.round()) / 2.0;
+            let tx_avg_s = tx_avg.round().to_string();
+
+            frame.render_widget(
+                Paragraph::new(format!("{}┈", chain_bar_max_s))
+                    .block(Block::default().style(Style::default().fg(Color::Blue)))
+                    .alignment(Alignment::Right),
+                chart_blocks_axis[0],
+            );
+            frame.render_widget(
+                Paragraph::new(format!("{}┈", chain_bar_avg_s))
+                    .block(Block::default().style(Style::default().fg(Color::Blue)))
+                    .alignment(Alignment::Right),
+                chart_blocks_axis[1],
+            );
+            frame.render_widget(
+                Paragraph::new(format!("{}┈", chain_bar_min_s))
+                    .block(Block::default().style(Style::default().fg(Color::Blue)))
+                    .alignment(Alignment::Right),
+                chart_blocks_axis[2],
+            );
+
+            frame.render_widget(
+                Paragraph::new(format!("┈{}", tx_max_s))
+                    .block(Block::default().style(Style::default().fg(Color::Green)))
+                    .alignment(Alignment::Left),
+                chart_tx_axis[0],
+            );
+            frame.render_widget(
+                Paragraph::new(format!("┈{}", tx_avg_s))
+                    .block(Block::default().style(Style::default().fg(Color::Green)))
+                    .alignment(Alignment::Left),
+                chart_tx_axis[1],
+            );
+            frame.render_widget(
+                Paragraph::new(format!("┈{}", tx_min_s))
+                    .block(Block::default().style(Style::default().fg(Color::Green)))
+                    .alignment(Alignment::Left),
+                chart_tx_axis[2],
+            );
 
             let chart = Chart::new(dataset_blocks)
-                .block(Block::new().padding(Padding::new(
-                    0, // left
-                    0, // right
-                    0, // top
-                    0, // bottom
-                )))
-                .y_axis(
-                    Axis::default()
-                        .title("")
-                        .style(Style::default().fg(Color::Gray))
-                        // .labels(vec![
-                        //     "0".bold(),
-                        //     chain_bar_avg_s.as_str().bold(),
-                        //     chain_bar_max_s.as_str().bold(),
-                        // ])
-                        .bounds([chain_bar_window.0, chain_bar_window.1]),
+                .block(
+                    Block::new()
+                        .padding(Padding::new(
+                            1, // left
+                            0, // right
+                            0, // top
+                            0, // bottom
+                        ))
+                        .borders(Borders::RIGHT)
+                        .border_style(Style::default().fg(Color::Green)),
                 )
+                .y_axis(Axis::default().bounds([chain_bar_window.0, chain_bar_window.1]))
                 .x_axis(Axis::default().bounds([time_window.0, time_window.1]));
 
-            frame.render_widget(chart, layout[2]);
+            frame.render_widget(chart, mixed_chart_layout[1]);
 
             let chart2 = Chart::new(dataset_txs)
-                .hidden_legend_constraints((Constraint::Max(0), Constraint::Max(0)))
-                .y_axis(
-                    Axis::default().bounds([transaction_window.0.round(), transaction_window.1]),
+                .block(
+                    ratatui::widgets::Block::new()
+                        .padding(Padding::new(
+                            0, // left
+                            1, // right
+                            0, // top
+                            0, // bottom
+                        ))
+                        .borders(Borders::LEFT)
+                        .border_style(Style::default().fg(Color::Blue)),
                 )
-                .x_axis(Axis::default().bounds([time_window.0.round(), time_window.1]));
+                .y_axis(Axis::default().bounds([transaction_window.0, transaction_window.1]))
+                .x_axis(Axis::default().bounds([time_window.0, time_window.1]));
 
-            frame.render_widget(chart2, layout[2]);
+            frame.render_widget(chart2, mixed_chart_layout[1]);
 
             // frame.render_widget(Paragraph::new("Bottom"), layout[0]);
             // frame.render_widget(Paragraph::new("Bottom"), layout[1]);
@@ -669,6 +678,7 @@ impl TuiConsole {
 
     fn refresh(&mut self, pipeline: &super::Pipeline) -> Result<(), WorkerError> {
         let mut snapshot = MetricsSnapshot::default();
+        snapshot.timestamp = Instant::now().duration_since(self.metrics_buffer.base_time);
 
         // match event::read() {
         //     Ok(event) => match event {
@@ -701,33 +711,25 @@ impl TuiConsole {
             let tether_type: StageTypes = tether.name().into();
 
             match tether_type {
-                StageTypes::Source => snapshot.sources_status = state.into(),
-                StageTypes::Enrich => snapshot.enrich_status = state.into(),
-                StageTypes::Reduce => snapshot.reducer_status = state.into(),
-                StageTypes::Storage => snapshot.storage_status = state.into(),
+                StageTypes::Source => snapshot.sources_status = MeteredValue::Label(state.into()),
+                StageTypes::Enrich => snapshot.enrich_status = MeteredValue::Label(state.into()),
+                StageTypes::Reduce => snapshot.reducer_status = MeteredValue::Label(state.into()),
+                StageTypes::Storage => snapshot.storage_status = MeteredValue::Label(state.into()),
                 StageTypes::Unknown => {}
             }
-
-            let mut transactions_increased = false;
 
             match tether.read_metrics() {
                 Ok(readings) => {
                     for (key, value) in readings {
                         match (tether.name(), key, value) {
                             (_, "chain_tip", Reading::Gauge(x)) => {
-                                if x > 0 {
-                                    snapshot.chain_bar_depth.set_num(x as u64);
-                                }
+                                snapshot.chain_bar_depth.set_num(x as u64);
                             }
                             (_, "last_block", Reading::Gauge(x)) => {
-                                if x > 0 {
-                                    snapshot.chain_bar_progress.set_num(x as u64);
-                                }
+                                snapshot.chain_bar_progress.set_num(x as u64);
                             }
                             (_, "blocks_processed", Reading::Count(x)) => {
-                                if x > 0 {
-                                    snapshot.blocks_processed.set_num(x as u64);
-                                }
+                                snapshot.blocks_processed.set_num(x as u64);
                             }
                             // (_, "received_blocks", Reading::Count(x)) => {
                             //     self.received_blocks.set_position(x);
@@ -745,9 +747,8 @@ impl TuiConsole {
                             //     self.storage_ops_count.set_position(x);
                             //     self.storage_ops_count.set_message(state);
                             // }
-                            (_, "enrich_inserts", Reading::Count(x)) => {
+                            (_, "transactions_finalized", Reading::Count(x)) => {
                                 snapshot.transactions.set_num(x as u64);
-                                transactions_increased = true;
                             }
                             // (_, "enrich_cancelled_empty_tx", Reading::Count(x)) => {
                             //     self.enrich_skipped_empty.set_position(x);
@@ -792,8 +793,8 @@ impl TuiConsole {
             };
         }
 
-        self.metrics_buffer.push(snapshot.clone());
-        self.draw(snapshot);
+        self.draw(&snapshot);
+        self.metrics_buffer.push(snapshot);
 
         Ok(())
     }

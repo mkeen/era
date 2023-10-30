@@ -45,6 +45,7 @@ impl Config {
             chain_era: Default::default(),
             last_block: Default::default(),
             blocks_processed: Default::default(),
+            transactions_finalized: Default::default(),
             ctx,
         }
     }
@@ -98,6 +99,9 @@ pub struct Stage {
 
     #[metric]
     blocks_processed: gasket::metrics::Counter,
+
+    #[metric]
+    transactions_finalized: gasket::metrics::Counter,
 }
 
 pub struct Worker {
@@ -344,11 +348,11 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                 match (block_bytes, parsed_block) {
                     (Some(block_bytes), Some(parsed_block)) => {
-                        stage.last_block.set(parsed_block.number() as i64);
-
                         stage
-                            .chain_era
-                            .set(string_to_i64(parsed_block.era().to_string()));
+                            .transactions_finalized
+                            .inc(parsed_block.txs().len() as u64);
+
+                        stage.last_block.set(parsed_block.number() as i64);
 
                         log::debug!(
                             "new cursor saved to redis {} {}",
