@@ -1,160 +1,65 @@
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::sync::Arc;
 
-use gasket::runtime::{spawn_stage, WorkOutcome};
-
+use gasket::framework::*;
+use gasket::messaging::tokio::InputPort;
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
-use crate::{bootstrap, crosscut, model};
-
-type InputPort = gasket::messaging::TwoPhaseInputPort<model::CRDTCommand>;
+use crate::{crosscut, model::CRDTCommand, pipeline::Context};
 
 #[derive(Deserialize, Clone)]
 pub struct Config {}
 
 impl Config {
-    pub fn bootstrapper(self) -> Bootstrapper {
-        Bootstrapper {
+    pub fn bootstrapper(self, ctx: Arc<Mutex<Context>>) -> Stage {
+        Stage {
+            _config: self.clone(),
             input: Default::default(),
-            last_point: Arc::new(Mutex::new(None)),
-        }
-    }
-}
-
-pub struct Bootstrapper {
-    input: InputPort,
-    last_point: Arc<Mutex<Option<crosscut::PointArg>>>,
-}
-
-impl Bootstrapper {
-    pub fn borrow_input_port(&mut self) -> &'_ mut InputPort {
-        &mut self.input
-    }
-
-    pub fn build_cursor(&mut self) -> Cursor {
-        Cursor {
-            last_point: self.last_point.clone(),
-        }
-    }
-
-    pub fn spawn_stages(self, pipeline: &mut bootstrap::Pipeline) {
-        let worker = Worker {
-            input: self.input,
+            ctx,
             ops_count: Default::default(),
-            last_point: self.last_point.clone(),
-        };
-
-        pipeline.register_stage(spawn_stage(
-            worker,
-            gasket::runtime::Policy {
-                tick_timeout: Some(Duration::from_secs(600)),
-                ..Default::default()
-            },
-            Some("skip"),
-        ));
+        }
     }
 }
 
-pub struct Cursor {
-    last_point: Arc<Mutex<Option<crosscut::PointArg>>>,
-}
+#[derive(Clone)]
+pub struct Cursor {}
 
 impl Cursor {
     pub fn last_point(&self) -> Result<Option<crosscut::PointArg>, crate::Error> {
-        let value = self.last_point.lock().unwrap();
-        Ok(value.clone())
+        Ok(None)
     }
 }
 
-pub struct Worker {
+pub struct Worker {}
+
+#[derive(Stage)]
+#[stage(name = "storage-skip", unit = "CRDTCommand", worker = "Worker")]
+pub struct Stage {
+    _config: Config,
+    pub ctx: Arc<Mutex<Context>>,
+
+    pub input: InputPort<CRDTCommand>,
+
+    #[metric]
     ops_count: gasket::metrics::Counter,
-    input: InputPort,
-    last_point: Arc<Mutex<Option<crosscut::PointArg>>>,
 }
 
-impl gasket::runtime::Worker for Worker {
-    fn metrics(&self) -> gasket::metrics::Registry {
-        gasket::metrics::Builder::new()
-            .with_counter("storage_ops", &self.ops_count)
-            .build()
+#[async_trait::async_trait(?Send)]
+impl gasket::framework::Worker<Stage> for Worker {
+    async fn bootstrap(_: &Stage) -> Result<Self, WorkerError> {
+        Ok(Self {})
     }
 
-    fn work(&mut self) -> gasket::runtime::WorkResult {
-        let msg = self.input.recv_or_idle()?;
+    async fn schedule(
+        &mut self,
+        stage: &mut Stage,
+    ) -> Result<WorkSchedule<CRDTCommand>, WorkerError> {
+        let msg = stage.input.recv().await.or_panic()?;
+        Ok(WorkSchedule::Unit(msg.payload))
+    }
 
-        match msg.payload {
-            model::CRDTCommand::BlockStarting(point) => {
-                log::debug!("block started {:?}", point);
-            }
-            model::CRDTCommand::GrowOnlySetAdd(key, member) => {
-                log::debug!("adding to grow-only set [{}], member [{}]", key, member);
-            }
-            model::CRDTCommand::SetAdd(key, member) => {
-                log::debug!("adding to set [{}], member [{}]", key, member);
-            }
-            model::CRDTCommand::SortedSetAdd(key, member, delta) => {
-                log::debug!(
-                    "adding to set [{}], member [{}], delta [{}]",
-                    key,
-                    member,
-                    delta
-                );
-            }
-            model::CRDTCommand::SortedSetRemove(key, member, delta) => {
-                log::debug!(
-                    "removing from set [{}], member [{}], delta [{}]",
-                    key,
-                    member,
-                    delta
-                );
-            }
-            model::CRDTCommand::SortedSetMemberRemove(key, member) => {
-                log::debug!("removing from set [{}], member [{}]", key, member);
-            }
-            model::CRDTCommand::SetRemove(key, member) => {
-                log::debug!("removing from set [{}], member [{}]", key, member);
-            }
-            model::CRDTCommand::LastWriteWins(key, _, ts) => {
-                log::debug!("last write for [{}], slot [{}]", key, ts);
-            }
-            model::CRDTCommand::AnyWriteWins(key, _) => {
-                log::debug!("overwrite [{}]", key);
-            }
-            model::CRDTCommand::Spoil(key) => {
-                log::debug!("spoil [{}]", key);
-            }
-            model::CRDTCommand::PNCounter(key, value) => {
-                log::debug!("increasing counter [{}], by [{}]", key, value);
-            }
-            model::CRDTCommand::HashSetValue(key, member, _) => {
-                log::debug!("setting hash key {} member {}", key, member);
-            }
-            model::CRDTCommand::HashSetMulti(key, members, values) => {
-                log::debug!(
-                    "setting hash key {} members {} values {}",
-                    key,
-                    members.len(),
-                    values.len()
-                );
-            }
-            model::CRDTCommand::HashCounter(key, member, delta) => {
-                log::debug!("increasing hash key {} member {} by {}", key, member, delta);
-            }
-            model::CRDTCommand::HashUnsetKey(key, member) => {
-                log::debug!("deleting hash key {} member {}", key, member);
-            }
-            model::CRDTCommand::UnsetKey(key) => {
-                log::debug!("deleting key {}", key);
-            }
-            model::CRDTCommand::BlockFinished(point, finalize) => {
-                log::debug!("block finished {:?} {}", point, finalize);
-            }
-        };
-
-        self.ops_count.inc(1);
-        self.input.commit();
-        Ok(WorkOutcome::Partial)
+    async fn execute(&mut self, _: &CRDTCommand, stage: &mut Stage) -> Result<(), WorkerError> {
+        stage.ops_count.inc(1);
+        Ok(())
     }
 }

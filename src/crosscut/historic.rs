@@ -1,7 +1,7 @@
-use crate::Error;
-use gasket::error::AsWorkError;
+use crate::{model::RawBlockPayload, Error};
 use pallas::network::miniprotocols::Point;
 use serde::{Deserialize, Serialize};
+use std::{mem, path::PathBuf};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -27,40 +27,109 @@ impl From<BlockConfig> for BufferBlocks {
 
 #[derive(Clone)]
 pub struct BufferBlocks {
+    pub config: BlockConfig,
     db: Option<sled::Db>,
-    db_depth: Option<usize>,
-    queue: Vec<(String, Vec<u8>)>,
+    queue: Vec<(String, Vec<u8>)>, //rollback queue.. badly named todo rename
+    buffer: Vec<RawBlockPayload>,
+}
+
+fn to_zero_padded_string(point: &Point) -> String {
+    let block_identifier = match point.clone() {
+        Point::Origin => String::from("ORIGIN"),
+        Point::Specific(_, block_hash) => String::from(hex::encode(block_hash)),
+    };
+
+    // This is needed so that the strings stored in jsonb will be ordered properly when they contain integers (zero padding)
+    return format!(
+        "{:0>width$}{}",
+        point.slot_or_default(),
+        block_identifier,
+        width = 15
+    );
 }
 
 impl BufferBlocks {
     fn open_db(config: BlockConfig) -> Self {
-        let db = sled::open(config.db_path).or_retry().unwrap();
+        let db = sled::Config::default()
+            .path(config.clone().db_path)
+            .cache_capacity(1073741824)
+            .open()
+            .unwrap();
+
+        log::error!("opened block buffer db");
         let queue: Vec<(String, Vec<u8>)> = Vec::default();
 
         BufferBlocks {
-            db_depth: Some(db.len() as usize), // o(n) to get the initial size, but should only be called once
+            config,
             db: Some(db),
             queue,
+            buffer: Default::default(),
         }
+    }
+
+    pub fn block_mem_add(&mut self, block_msg_payload: RawBlockPayload) {
+        self.buffer.push(block_msg_payload.to_owned());
+    }
+
+    pub fn block_mem_take_all(&mut self) -> Option<Vec<RawBlockPayload>> {
+        let empty: Vec<RawBlockPayload> = vec![];
+        let blocks = mem::replace(&mut self.buffer, empty);
+        match blocks.is_empty() {
+            true => None,
+            false => Some(blocks),
+        }
+    }
+
+    pub fn block_mem_size(&self) -> usize {
+        self.buffer.len()
+    }
+
+    fn get_db_ref(&self) -> &sled::Db {
+        self.db.as_ref().unwrap()
+    }
+
+    fn get_rollback_range(&mut self, from: &Point) -> Vec<(String, Vec<u8>)> {
+        let mut blocks_to_roll_back: Vec<(String, Vec<u8>)> = vec![];
+
+        let db = self.get_db_ref();
+
+        let key = to_zero_padded_string(from);
+
+        let mut last_seen_slot_key = key.clone();
+
+        while let Some((next_key, next_block)) = db.get_gt(last_seen_slot_key.as_bytes()).unwrap() {
+            last_seen_slot_key = String::from_utf8(next_key.to_vec()).unwrap();
+            blocks_to_roll_back.push((last_seen_slot_key.clone(), next_block.to_vec()));
+        }
+
+        if !blocks_to_roll_back.is_empty() {
+            self.queue = blocks_to_roll_back;
+        }
+
+        self.queue.clone()
+    }
+
+    pub fn close(self) {
+        self.get_db_ref().flush().unwrap_or_default();
     }
 
     pub fn insert_block(&mut self, point: &Point, block: &Vec<u8>) {
-        let key = point.slot_or_default();
+        let key = to_zero_padded_string(point);
         let db = self.get_db_ref();
-        db.insert(key.to_string().as_bytes(), sled::IVec::from(block.clone()))
+        db.insert(key.as_bytes(), sled::IVec::from(block.clone()))
             .expect("todo map storage error");
+    }
 
-        self.db_depth_up();
-        if self.drop_old_block_if_buffer_max() {
-            self.db_depth_down();
-        }
+    pub fn remove_block(&mut self, point: &Point) {
+        let key = to_zero_padded_string(point);
+        let db = self.get_db_ref();
+        db.remove(key.as_bytes()).expect("todo map storage error");
     }
 
     pub fn get_block_at_point(&self, point: &Point) -> Option<Vec<u8>> {
-        match self
-            .get_db_ref()
-            .get(point.slot_or_default().to_string().as_bytes())
-        {
+        let key = to_zero_padded_string(point);
+
+        match self.get_db_ref().get(key.as_bytes()) {
             Ok(block) => match block {
                 Some(block) => Some(block.to_vec()),
                 None => None,
@@ -79,12 +148,8 @@ impl BufferBlocks {
         }
     }
 
-    pub fn close(&self) {
-        self.get_db_ref().flush().unwrap_or_default();
-    }
-
     pub fn enqueue_rollback_batch(&mut self, from: &Point) -> usize {
-        self.get_rollback_range(from).len()
+        self.get_rollback_range(&from.clone()).len()
     }
 
     pub fn rollback_pop(&mut self) -> Option<Vec<u8>> {
@@ -102,81 +167,5 @@ impl BufferBlocks {
 
     pub fn get_current_queue_depth(&mut self) -> usize {
         self.queue.len()
-    }
-
-    fn get_db_ref(&self) -> &sled::Db {
-        self.db.as_ref().unwrap()
-    }
-
-    fn get_rollback_range(&mut self, from: &Point) -> Vec<(String, Vec<u8>)> {
-        let mut blocks_to_roll_back: Vec<(String, Vec<u8>)> = vec![];
-
-        let db = self.get_db_ref();
-
-        let slot = from.slot_or_default().to_string();
-
-        let current_block = match db.get(slot.as_bytes()).unwrap() {
-            None => vec![],
-            Some(value) => value.to_vec(),
-        };
-
-        if !current_block.is_empty() {
-            blocks_to_roll_back.push((slot.clone(), current_block.to_vec()));
-        }
-
-        //let mut clear_blocks = sled::Batch::default();
-
-        let mut last_seen_slot = slot.to_string();
-        while let Some((next_key, next_block)) = db.get_gt(last_seen_slot.as_bytes()).unwrap() {
-            last_seen_slot = String::from_utf8(next_key.to_vec()).unwrap();
-            blocks_to_roll_back.push((last_seen_slot.clone(), next_block.to_vec()));
-        }
-
-        if !blocks_to_roll_back.is_empty() {
-            self.queue = blocks_to_roll_back;
-        }
-
-        self.queue.clone()
-    }
-
-    fn drop_old_block_if_buffer_max(&mut self) -> bool {
-        let db = self.get_db_ref();
-        let mut dropped = false;
-
-        if self.db_depth.unwrap() > 50000 {
-            let first = match db.first() {
-                Ok(first) => first,
-                Err(_) => None,
-            };
-
-            if let Some((first, _)) = first {
-                db.remove(first).expect("todo: map storage error");
-                dropped = true;
-            }
-        }
-
-        dropped
-    }
-
-    fn db_depth_down(&mut self) -> usize {
-        let current_db_depth = self.db_depth.unwrap();
-        if current_db_depth > 0 {
-            return current_db_depth - 1;
-        }
-
-        self.db_depth = Some(current_db_depth);
-
-        return current_db_depth;
-    }
-
-    fn db_depth_up(&mut self) -> usize {
-        let current_db_depth = self.db_depth.unwrap();
-        if current_db_depth > 0 {
-            return current_db_depth + 1;
-        }
-
-        self.db_depth = Some(current_db_depth);
-
-        return current_db_depth;
     }
 }
