@@ -1,24 +1,24 @@
-use std::sync::Arc;
+use std::time::Duration;
 
-use elasticsearch::Elasticsearch;
-
-use elasticsearch::http::response::Response;
-
+use elasticsearch::{http::response::Response, Elasticsearch};
 use futures::stream::StreamExt;
 
-use gasket::framework::*;
-use gasket::messaging::tokio::InputPort;
+use gasket::{
+    error::AsWorkError,
+    runtime::{spawn_stage, WorkOutcome},
+};
 
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
-use tokio::sync::Mutex;
 
 use crate::{
-    crosscut,
+    bootstrap, crosscut,
     model::{self, CRDTCommand},
-    pipeline::Context,
+    prelude::AppliesPolicy,
     Error,
 };
+
+type InputPort = gasket::messaging::TwoPhaseInputPort<model::CRDTCommand>;
 
 impl From<model::Value> for JsonValue {
     fn from(other: model::Value) -> JsonValue {
@@ -41,24 +41,84 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(self, ctx: Arc<Mutex<Context>>) -> Stage {
-        Stage {
-            config: self.clone(),
+    pub fn bootstrapper(
+        self,
+        _chain: &crosscut::ChainWellKnownInfo,
+        _intersect: &crosscut::IntersectConfig,
+        policy: &crosscut::policies::RuntimePolicy,
+    ) -> Bootstrapper {
+        Bootstrapper {
+            config: self,
+            policy: policy.clone(),
             input: Default::default(),
-            ops_count: Default::default(),
-            cursor: Cursor {},
-            ctx,
         }
     }
 }
 
-#[derive(Clone)]
+pub struct Bootstrapper {
+    config: Config,
+    policy: crosscut::policies::RuntimePolicy,
+    input: InputPort,
+}
+
+impl Bootstrapper {
+    pub fn borrow_input_port(&mut self) -> &'_ mut InputPort {
+        &mut self.input
+    }
+
+    pub fn build_cursor(&self) -> Cursor {
+        Cursor {}
+    }
+
+    pub fn spawn_stages(self, pipeline: &mut bootstrap::Pipeline) {
+        let threads = self.config.worker_threads.unwrap_or(3);
+
+        let worker = Worker {
+            config: self.config,
+            policy: self.policy,
+            client: None,
+            runtime: tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(threads)
+                .enable_io()
+                .enable_time()
+                .build()
+                .expect("couldn't setup tokio async runtime"),
+            input: self.input,
+            ops_count: Default::default(),
+        };
+
+        pipeline.register_stage(spawn_stage(
+            worker,
+            gasket::runtime::Policy {
+                tick_timeout: Some(Duration::from_secs(600)),
+                bootstrap_retry: gasket::retries::Policy {
+                    max_retries: 20,
+                    backoff_unit: Duration::from_secs(1),
+                    backoff_factor: 2,
+                    max_backoff: Duration::from_secs(60),
+                },
+                ..Default::default()
+            },
+            Some("elastic"),
+        ));
+    }
+}
+
 pub struct Cursor {}
 
 impl Cursor {
     pub fn last_point(&mut self) -> Result<Option<crosscut::PointArg>, crate::Error> {
         Ok(None)
     }
+}
+
+pub struct Worker {
+    config: Config,
+    client: Option<Elasticsearch>,
+    runtime: tokio::runtime::Runtime,
+    policy: crosscut::policies::RuntimePolicy,
+    ops_count: gasket::metrics::Counter,
+    input: InputPort,
 }
 
 const BATCH_SIZE: usize = 40;
@@ -69,14 +129,14 @@ struct Batch {
     items: Vec<CRDTCommand>,
 }
 
-async fn recv_batch(input: &mut InputPort<CRDTCommand>) -> Result<Batch, gasket::error::Error> {
+fn recv_batch(input: &mut InputPort) -> Result<Batch, gasket::error::Error> {
     let mut batch = Batch::default();
 
     loop {
-        match input.recv().await {
+        match input.recv_or_idle() {
             Ok(x) => match x.payload {
                 CRDTCommand::BlockStarting(_) => (),
-                CRDTCommand::BlockFinished(_, _, _) => {
+                CRDTCommand::BlockFinished(_, _) => {
                     batch.block_end = Some(x.payload);
                     return Ok(batch);
                 }
@@ -84,7 +144,8 @@ async fn recv_batch(input: &mut InputPort<CRDTCommand>) -> Result<Batch, gasket:
                     batch.items.push(x.payload);
                 }
             },
-            _ => return Err(gasket::error::Error::RecvError),
+            Err(gasket::error::Error::RecvIdle) => return Ok(batch),
+            Err(err) => return Err(err),
         };
 
         if batch.items.len() >= BATCH_SIZE {
@@ -104,7 +165,7 @@ async fn apply_command(cmd: CRDTCommand, client: &Elasticsearch) -> Option<ESRes
             .send()
             .await
             .into(),
-        CRDTCommand::BlockFinished(_, _, _) => {
+        CRDTCommand::BlockFinished(_, _) => {
             log::warn!("Elasticsearch storage doesn't support cursors ATM");
             None
         }
@@ -112,7 +173,11 @@ async fn apply_command(cmd: CRDTCommand, client: &Elasticsearch) -> Option<ESRes
     }
 }
 
-async fn apply_batch(batch: Batch, client: &Elasticsearch) -> Result<(), gasket::error::Error> {
+async fn apply_batch(
+    batch: Batch,
+    client: &Elasticsearch,
+    policy: &crosscut::policies::RuntimePolicy,
+) -> Result<(), gasket::error::Error> {
     let mut stream = futures::stream::iter(batch.items)
         .map(|cmd| apply_command(cmd, client))
         .buffer_unordered(10);
@@ -125,8 +190,8 @@ async fn apply_batch(batch: Batch, client: &Elasticsearch) -> Result<(), gasket:
             result
                 .map(|x| x.error_for_status_code())
                 .map_err(|e| Error::StorageError(e.to_string()))
-                .unwrap()
-                .unwrap();
+                .apply_policy(policy)
+                .or_panic()?;
         }
     }
 
@@ -137,62 +202,41 @@ async fn apply_batch(batch: Batch, client: &Elasticsearch) -> Result<(), gasket:
             result
                 .and_then(|x| x.error_for_status_code())
                 .map_err(|e| Error::StorageError(e.to_string()))
-                .unwrap();
+                .apply_policy(policy)
+                .or_panic()?;
         }
     }
 
     Ok(())
 }
 
-#[derive(Stage)]
-#[stage(
-    name = "storage-elasticsearch",
-    unit = "CRDTCommand",
-    worker = "Worker"
-)]
-pub struct Stage {
-    config: Config,
-    pub cursor: Cursor,
-    pub ctx: Arc<Mutex<Context>>,
-
-    pub input: InputPort<CRDTCommand>,
-
-    #[metric]
-    ops_count: gasket::metrics::Counter,
-}
-
-pub struct Worker {
-    client: Option<Elasticsearch>,
-}
-
-// todo this is trash. schedule and execute both going out and trying to find work their own dumb ways
-#[async_trait::async_trait(?Send)]
-impl gasket::framework::Worker<Stage> for Worker {
-    async fn schedule(
-        &mut self,
-        stage: &mut Stage,
-    ) -> Result<WorkSchedule<CRDTCommand>, WorkerError> {
-        let msg = stage.input.recv().await.or_panic()?;
-        Ok(WorkSchedule::Unit(msg.payload))
+impl gasket::runtime::Worker for Worker {
+    fn metrics(&self) -> gasket::metrics::Registry {
+        gasket::metrics::Builder::new()
+            .with_counter("storage_ops", &self.ops_count)
+            .build()
     }
 
-    async fn execute(&mut self, _: &CRDTCommand, stage: &mut Stage) -> Result<(), WorkerError> {
-        let batch = recv_batch(&mut stage.input).await.unwrap();
+    fn work(&mut self) -> gasket::runtime::WorkResult {
+        let batch = recv_batch(&mut self.input)?;
         let count = batch.items.len();
         let client = self.client.as_ref().unwrap();
 
-        apply_batch(batch, client).await.unwrap();
-        stage.ops_count.inc(count as u64);
-        Ok(())
+        self.runtime
+            .block_on(async { apply_batch(batch, client, &self.policy).await })?;
+
+        self.ops_count.inc(count as u64);
+        self.input.commit();
+
+        Ok(WorkOutcome::Partial)
     }
 
-    async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
-        let url = elasticsearch::http::Url::parse(&stage.config.connection_url)
+    fn bootstrap(&mut self) -> Result<(), gasket::error::Error> {
+        let url = elasticsearch::http::Url::parse(&self.config.connection_url)
             .map_err(|err| Error::ConfigError(err.to_string()))
-            .or_panic()
-            .unwrap();
+            .or_panic()?;
 
-        let auth = (&stage.config.username, &stage.config.password);
+        let auth = (&self.config.username, &self.config.password);
 
         let pool = elasticsearch::http::transport::SingleNodeConnectionPool::new(url);
 
@@ -207,15 +251,17 @@ impl gasket::framework::Worker<Stage> for Worker {
             transport
         };
 
-        let client = Elasticsearch::new(
-            transport
-                .cert_validation(elasticsearch::cert::CertificateValidation::None)
-                .build()
-                .or_retry()
-                .unwrap(),
-        )
-        .into();
+        let transport = transport
+            .cert_validation(elasticsearch::cert::CertificateValidation::None)
+            .build()
+            .or_retry()?;
 
-        Ok(Self { client })
+        self.client = Elasticsearch::new(transport).into();
+
+        Ok(())
+    }
+
+    fn teardown(&mut self) -> Result<(), gasket::error::Error> {
+        Ok(())
     }
 }

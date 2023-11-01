@@ -1,17 +1,17 @@
-use std::str::FromStr;
-use std::sync::Arc;
+use std::{str::FromStr, time::Duration};
 
-use gasket::framework::*;
-use gasket::messaging::tokio::InputPort;
+use gasket::{
+    error::AsWorkError,
+    runtime::{spawn_stage, WorkOutcome},
+};
 
-use pallas::ledger::traverse::MultiEraBlock;
 use redis::{Cmd, Commands, ConnectionLike, ToRedisArgs};
 use serde::Deserialize;
-use tokio::sync::Mutex;
 
-use crate::model::{CRDTCommand, Member, Value};
-use crate::pipeline::Context;
-use crate::{crosscut, model};
+use crate::model::{Member, Value};
+use crate::{bootstrap, crosscut, model};
+
+type InputPort = gasket::messaging::TwoPhaseInputPort<model::CRDTCommand>;
 
 impl ToRedisArgs for model::Value {
     fn write_redis_args<W>(&self, out: &mut W)
@@ -34,19 +34,14 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn bootstrapper(&self, ctx: Arc<Mutex<Context>>) -> Stage {
-        Stage {
-            config: self.clone(),
-            cursor: Cursor {
-                config: self.clone(),
-            },
+    pub fn bootstrapper(
+        self,
+        _chain: &crosscut::ChainWellKnownInfo,
+        _intersect: &crosscut::IntersectConfig,
+    ) -> Bootstrapper {
+        Bootstrapper {
+            config: self,
             input: Default::default(),
-            storage_ops: Default::default(),
-            chain_era: Default::default(),
-            last_block: Default::default(),
-            blocks_processed: Default::default(),
-            transactions_finalized: Default::default(),
-            ctx,
         }
     }
 
@@ -55,7 +50,47 @@ impl Config {
     }
 }
 
-#[derive(Clone)]
+pub struct Bootstrapper {
+    config: Config,
+    input: InputPort,
+}
+
+impl Bootstrapper {
+    pub fn borrow_input_port(&mut self) -> &'_ mut InputPort {
+        &mut self.input
+    }
+
+    pub fn build_cursor(&self) -> Cursor {
+        Cursor {
+            config: self.config.clone(),
+        }
+    }
+
+    pub fn spawn_stages(self, pipeline: &mut bootstrap::Pipeline) {
+        let worker = Worker {
+            config: self.config.clone(),
+            connection: None,
+            input: self.input,
+            ops_count: Default::default(),
+        };
+
+        pipeline.register_stage(spawn_stage(
+            worker,
+            gasket::runtime::Policy {
+                tick_timeout: Some(Duration::from_secs(600)),
+                bootstrap_retry: gasket::retries::Policy {
+                    max_retries: 20,
+                    backoff_unit: Duration::from_secs(1),
+                    backoff_factor: 2,
+                    max_backoff: Duration::from_secs(60),
+                },
+                ..Default::default()
+            },
+            Some("redis"),
+        ));
+    }
+}
+
 pub struct Cursor {
     config: Config,
 }
@@ -79,93 +114,37 @@ impl Cursor {
     }
 }
 
-#[derive(Stage)]
-#[stage(name = "storage-redis", unit = "CRDTCommand", worker = "Worker")]
-pub struct Stage {
-    config: Config,
-    pub cursor: Cursor,
-    pub ctx: Arc<Mutex<Context>>,
-
-    pub input: InputPort<CRDTCommand>,
-
-    #[metric]
-    storage_ops: gasket::metrics::Counter,
-
-    #[metric]
-    chain_era: gasket::metrics::Gauge,
-
-    #[metric]
-    last_block: gasket::metrics::Gauge,
-
-    #[metric]
-    blocks_processed: gasket::metrics::Counter,
-
-    #[metric]
-    transactions_finalized: gasket::metrics::Counter,
-}
-
 pub struct Worker {
+    config: Config,
     connection: Option<redis::Connection>,
+    ops_count: gasket::metrics::Counter,
+    input: InputPort,
 }
 
-// Hack to encode era
-pub fn string_to_i64(s: String) -> i64 {
-    let bytes = s.into_bytes();
-    let mut result: i64 = 0;
-
-    for &b in bytes.iter() {
-        assert!(b < 128); // Ensures ascii
-        result <<= 8;
-        result |= i64::from(b);
+impl gasket::runtime::Worker for Worker {
+    fn metrics(&self) -> gasket::metrics::Registry {
+        gasket::metrics::Builder::new()
+            .with_counter("storage_ops", &self.ops_count)
+            .build()
     }
 
-    // If the string is less than 8 characters, left pad with zeros.
-    for _ in 0..8usize.saturating_sub(bytes.len()) {
-        result <<= 8;
-    }
+    fn work(&mut self) -> gasket::runtime::WorkResult {
+        let msg = self.input.recv_or_idle()?;
 
-    result
-}
-
-#[async_trait::async_trait(?Send)]
-impl gasket::framework::Worker<Stage> for Worker {
-    async fn bootstrap(stage: &Stage) -> Result<Self, WorkerError> {
-        log::debug!("starting redis");
-        let connection = redis::Client::open(stage.config.connection_params.clone())
-            .and_then(|c| c.get_connection())
-            .or_retry()?;
-
-        log::debug!("redis connection opened");
-        Ok(Self {
-            connection: Some(connection),
-        })
-    }
-
-    async fn schedule(
-        &mut self,
-        stage: &mut Stage,
-    ) -> Result<WorkSchedule<CRDTCommand>, WorkerError> {
-        let msg = stage.input.recv().await.or_retry()?;
-        Ok(WorkSchedule::Unit(msg.payload))
-    }
-
-    async fn execute(&mut self, unit: &CRDTCommand, stage: &mut Stage) -> Result<(), WorkerError> {
-        stage.storage_ops.inc(1);
-
-        match unit {
-            model::CRDTCommand::Noop => Ok(()),
+        match msg.payload {
             model::CRDTCommand::BlockStarting(_) => {
                 // start redis transaction
                 redis::cmd("MULTI")
                     .query(self.connection.as_mut().unwrap())
-                    .or_retry()
+                    .or_restart()?;
             }
-            model::CRDTCommand::GrowOnlySetAdd(key, member) => self
-                .connection
-                .as_mut()
-                .unwrap()
-                .sadd(key, member)
-                .or_retry(),
+            model::CRDTCommand::GrowOnlySetAdd(key, member) => {
+                self.connection
+                    .as_mut()
+                    .unwrap()
+                    .sadd(key, member)
+                    .or_restart()?;
+            }
             model::CRDTCommand::SetAdd(key, member) => {
                 log::debug!("adding to set [{}], value [{}]", key, member);
 
@@ -173,7 +152,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .sadd(key, member)
-                    .or_retry()
+                    .or_restart()?;
             }
             model::CRDTCommand::SetRemove(key, member) => {
                 log::debug!("removing from set [{}], value [{}]", key, member);
@@ -182,7 +161,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .srem(key, member)
-                    .or_retry()
+                    .or_restart()?;
             }
             model::CRDTCommand::LastWriteWins(key, member, ts) => {
                 log::debug!("last write for [{}], slot [{}]", key, ts);
@@ -191,7 +170,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .zadd(key, member, ts)
-                    .or_retry()
+                    .or_restart()?;
             }
             model::CRDTCommand::SortedSetAdd(key, member, delta) => {
                 log::debug!(
@@ -205,7 +184,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .zincr(key, member, delta)
-                    .or_retry()
+                    .or_restart()?;
             }
             model::CRDTCommand::SortedSetMemberRemove(key, member) => {
                 log::debug!("sorted set member remove [{}], value [{}]", key, member);
@@ -214,7 +193,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .zrem(&key, member)
-                    .or_retry()
+                    .or_restart()?;
             }
             model::CRDTCommand::SortedSetRemove(key, member, delta) => {
                 log::debug!(
@@ -228,17 +207,21 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .zrembyscore(&key, member, delta)
-                    .or_retry()
+                    .or_restart()?;
             }
             model::CRDTCommand::Spoil(key) => {
                 log::debug!("overwrite [{}]", key);
 
-                self.connection.as_mut().unwrap().del(key).or_retry()
+                self.connection.as_mut().unwrap().del(key).or_restart()?;
             }
             model::CRDTCommand::AnyWriteWins(key, value) => {
                 log::debug!("overwrite [{}]", key);
 
-                self.connection.as_mut().unwrap().set(key, value).or_retry()
+                self.connection
+                    .as_mut()
+                    .unwrap()
+                    .set(key, value)
+                    .or_restart()?;
             }
             model::CRDTCommand::PNCounter(key, delta) => {
                 log::debug!("increasing counter [{}], by [{}]", key, delta);
@@ -252,8 +235,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                             .arg(key)
                             .arg(delta.to_string()),
                     )
-                    .and_then(|_| Ok(()))
-                    .or_retry()
+                    .or_restart()?;
             }
             model::CRDTCommand::HashSetMulti(key, members, values) => {
                 log::debug!(
@@ -272,7 +254,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .hset_multiple(key, &tuples)
-                    .or_retry()
+                    .or_restart()?;
             }
             model::CRDTCommand::HashSetValue(key, member, value) => {
                 log::debug!("setting hash key {} member {}", key, member);
@@ -281,7 +263,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .hset(key, member, value)
-                    .or_retry()
+                    .or_restart()?;
             }
             model::CRDTCommand::HashCounter(key, member, delta) => {
                 log::debug!(
@@ -301,8 +283,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                             .arg(member.clone())
                             .arg(delta.to_string()),
                     )
-                    .and_then(|_| Ok(()))
-                    .or_retry()
+                    .or_restart()?;
             }
             model::CRDTCommand::HashUnsetKey(key, member) => {
                 log::debug!("deleting hash key {} member {}", key, member);
@@ -311,79 +292,53 @@ impl gasket::framework::Worker<Stage> for Worker {
                     .as_mut()
                     .unwrap()
                     .hdel(member, key)
-                    .or_retry()
+                    .or_restart()?;
             }
             model::CRDTCommand::UnsetKey(key) => {
                 log::debug!("deleting key {}", key);
 
-                self.connection.as_mut().unwrap().del(key).or_restart()
+                self.connection.as_mut().unwrap().del(key).or_restart()?;
             }
-            model::CRDTCommand::BlockFinished(point, block_bytes, rollback) => {
-                let cursor_str = crosscut::PointArg::from(point.clone()).to_string();
+            model::CRDTCommand::BlockFinished(point, finalize) => {
+                let cursor_str = crosscut::PointArg::from(point).to_string();
 
-                let parsed_block = match block_bytes {
-                    Some(block_bytes) => {
-                        let block = MultiEraBlock::decode(&block_bytes).unwrap();
-                        stage.chain_era.set(string_to_i64(block.era().to_string()));
-                        Some(block)
-                    }
-                    None => {
-                        stage.chain_era.set(string_to_i64("Byron".to_string()));
-                        None
-                    }
-                };
+                if finalize {
+                    self.connection
+                        .as_mut()
+                        .unwrap()
+                        .set(self.config.cursor_key(), &cursor_str)
+                        .or_restart()?;
 
-                self.connection
-                    .as_mut()
-                    .unwrap()
-                    .set(stage.config.cursor_key(), &cursor_str)
-                    .or_retry()?;
+                    log::info!(
+                        "new cursor saved to redis {} {}",
+                        &self.config.cursor_key(),
+                        &cursor_str
+                    );
+                }
 
                 // end redis transaction
                 redis::cmd("EXEC")
                     .query(self.connection.as_mut().unwrap())
-                    .or_retry()?;
-
-                stage.blocks_processed.inc(1);
-
-                let result = match (block_bytes, parsed_block) {
-                    (Some(block_bytes), Some(parsed_block)) => {
-                        stage
-                            .transactions_finalized
-                            .inc(parsed_block.txs().len() as u64);
-
-                        stage.last_block.set(parsed_block.number() as i64);
-
-                        if *rollback {
-                            stage.ctx.lock().await.block_buffer.remove_block(&point);
-                        }
-
-                        stage
-                            .ctx
-                            .lock()
-                            .await
-                            .block_buffer
-                            .insert_block(&point, block_bytes);
-
-                        Ok(())
-                    }
-                    _ => {
-                        stage.chain_era.set(string_to_i64("Byron".to_string()));
-                        Ok(())
-                    }
-                };
-
-                log::info!(
-                    "rolled {} to {}",
-                    match rollback {
-                        true => "backward",
-                        false => "forward",
-                    },
-                    cursor_str
-                );
-
-                result
+                    .or_restart()?;
             }
-        }
+        };
+
+        self.ops_count.inc(1);
+        self.input.commit();
+
+        Ok(WorkOutcome::Partial)
+    }
+
+    fn bootstrap(&mut self) -> Result<(), gasket::error::Error> {
+        self.connection = redis::Client::open(self.config.connection_params.clone())
+            .and_then(|c| c.get_connection())
+            .or_retry()?
+            .into();
+
+        Ok(())
+    }
+
+    fn teardown(&mut self) -> Result<(), gasket::error::Error> {
+        Ok(())
     }
 }

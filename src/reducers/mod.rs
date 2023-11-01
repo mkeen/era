@@ -1,94 +1,132 @@
-use std::sync::Arc;
+use std::time::Duration;
 
-use gasket::messaging::tokio::OutputPort;
-use pallas::crypto::hash::Hash;
-use pallas::ledger::configs::byron::GenesisUtxo;
+use gasket::runtime::spawn_stage;
 use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
-use tokio::sync::Mutex;
 
-use crate::model;
-use crate::model::CRDTCommand;
-use crate::pipeline::Context;
+use crate::{bootstrap, crosscut, model};
+
+type InputPort = gasket::messaging::TwoPhaseInputPort<model::EnrichedBlockPayload>;
+type OutputPort = gasket::messaging::OutputPort<model::CRDTCommand>;
 
 pub mod macros;
 
-pub mod utils;
-
-pub mod assets_balances;
-pub mod assets_last_moved;
-pub mod handles;
-pub mod metadata;
+pub mod ada_handle;
+pub mod asset_metadata;
+pub mod multi_asset_balances;
 pub mod parameters;
+pub mod policy_assets_moved;
 pub mod stake_to_pool;
-pub mod utxo;
+pub mod utxo_by_address;
+pub mod utxo_owners;
 
-pub mod worker;
+mod worker;
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize)]
 #[serde(tag = "type")]
 pub enum Config {
-    Utxo(utxo::Config),
+    UtxoOwners(utxo_owners::Config),
+    UtxoByAddress(utxo_by_address::Config),
     Parameters(parameters::Config),
-    Metadata(metadata::Config),
-    AssetsLastMoved(assets_last_moved::Config),
-    AssetsBalances(assets_balances::Config),
-    Handles(handles::Config),
+    AssetMetadata(asset_metadata::Config),
+    PolicyAssetsMoved(policy_assets_moved::Config),
+    MultiAssetBalances(multi_asset_balances::Config),
+    AdaHandle(ada_handle::Config),
     StakeToPool(stake_to_pool::Config),
 }
 
 impl Config {
-    fn bootstrapper(self, ctx: Arc<Mutex<Context>>) -> Reducer {
+    fn plugin(
+        self,
+        chain: &crosscut::ChainWellKnownInfo,
+        policy: &crosscut::policies::RuntimePolicy,
+    ) -> Reducer {
         match self {
-            Config::Utxo(c) => c.plugin(ctx),
-            Config::Parameters(c) => c.plugin(ctx),
-            Config::Metadata(c) => c.plugin(ctx),
-            Config::AssetsLastMoved(c) => c.plugin(ctx),
-            Config::AssetsBalances(c) => c.plugin(ctx),
-            Config::Handles(c) => c.plugin(ctx),
+            Config::UtxoOwners(c) => c.plugin(policy),
+            Config::UtxoByAddress(c) => c.plugin(policy),
+            Config::Parameters(c) => c.plugin(chain),
+            Config::AssetMetadata(c) => c.plugin(chain, policy),
+            Config::PolicyAssetsMoved(c) => c.plugin(chain, policy),
+            Config::MultiAssetBalances(c) => c.plugin(chain, policy),
+            Config::AdaHandle(c) => c.plugin(chain),
             Config::StakeToPool(c) => c.plugin(),
         }
     }
 }
 
-#[derive(Clone)]
+pub struct Bootstrapper {
+    input: InputPort,
+    output: OutputPort,
+    reducers: Vec<Reducer>,
+    policy: crosscut::policies::RuntimePolicy,
+}
+
+impl Bootstrapper {
+    pub fn new(
+        configs: Vec<Config>,
+        chain: &crosscut::ChainWellKnownInfo,
+        policy: &crosscut::policies::RuntimePolicy,
+    ) -> Self {
+        Self {
+            reducers: configs
+                .into_iter()
+                .map(|x| x.plugin(chain, policy))
+                .collect(),
+            input: Default::default(),
+            output: Default::default(),
+            policy: policy.clone(),
+        }
+    }
+
+    pub fn borrow_input_port(&mut self) -> &'_ mut InputPort {
+        &mut self.input
+    }
+
+    pub fn borrow_output_port(&mut self) -> &'_ mut OutputPort {
+        &mut self.output
+    }
+
+    pub fn spawn_stages(self, pipeline: &mut bootstrap::Pipeline) {
+        let worker = worker::Worker::new(self.reducers, self.input, self.output, self.policy);
+        pipeline.register_stage(spawn_stage(
+            worker,
+            gasket::runtime::Policy {
+                tick_timeout: Some(Duration::from_secs(600)),
+                ..Default::default()
+            },
+            Some("reducers"),
+        ));
+    }
+}
+
 pub enum Reducer {
-    Utxo(utxo::Reducer),
+    UtxoOwners(utxo_owners::Reducer),
+    UtxoByAddress(utxo_by_address::Reducer),
     Parameters(parameters::Reducer),
-    Metadata(metadata::Reducer),
-    AssetsLastMoved(assets_last_moved::Reducer),
-    AssetsBalances(assets_balances::Reducer),
-    Handle(handles::Reducer),
+    AssetMetadata(asset_metadata::Reducer),
+    PolicyAssetsMoved(policy_assets_moved::Reducer),
+    MultiAssetBalances(multi_asset_balances::Reducer),
+    AdaHandle(ada_handle::Reducer),
     StakeToPool(stake_to_pool::Reducer),
 }
 
 impl Reducer {
-    pub async fn reduce_block<'b>(
+    pub fn reduce_block<'b>(
         &mut self,
-        block: Option<MultiEraBlock<'b>>,
-        block_ctx: Option<model::BlockContext>,
-        genesis_utxos: Option<Vec<GenesisUtxo>>,
-        genesis_hash: Option<Hash<32>>,
+        block: &'b MultiEraBlock<'b>,
+        ctx: &model::BlockContext,
         rollback: bool,
-        output: Arc<Mutex<OutputPort<CRDTCommand>>>,
-    ) -> Result<(), gasket::framework::WorkerError> {
+        output: &mut OutputPort,
+    ) -> Result<(), gasket::error::Error> {
         match self {
-            Reducer::Utxo(x) => {
-                x.reduce(block, block_ctx, genesis_utxos, rollback, output.clone())
-                    .await
-            }
-            Reducer::Parameters(x) => {
-                x.reduce(block, genesis_utxos, genesis_hash, rollback, output)
-                    .await
-            }
-            Reducer::Metadata(x) => x.reduce(block, rollback, output).await,
-            Reducer::AssetsLastMoved(x) => x.reduce(block, output).await,
-            Reducer::AssetsBalances(x) => {
-                x.reduce(block, block_ctx, genesis_utxos, rollback, output)
-                    .await
-            }
-            Reducer::Handle(x) => x.reduce(block, block_ctx, rollback, output).await,
-            Reducer::StakeToPool(x) => x.reduce(block, rollback, output).await,
+            Reducer::UtxoOwners(x) => x.reduce_block(block, ctx, rollback, output),
+            Reducer::UtxoByAddress(x) => x.reduce_block(block, ctx, rollback, output),
+            Reducer::Parameters(x) => x.reduce_block(block, rollback, output),
+            Reducer::AssetMetadata(x) => x.reduce_block(block, rollback, output),
+            Reducer::PolicyAssetsMoved(x) => x.reduce_block(block, output),
+            Reducer::MultiAssetBalances(x) => x.reduce_block(block, ctx, rollback, output),
+            Reducer::AdaHandle(x) => x.reduce_block(block, ctx, rollback, output),
+            Reducer::StakeToPool(x) => x.reduce_block(block, rollback, output),
         }
     }
 }

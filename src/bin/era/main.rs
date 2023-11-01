@@ -1,6 +1,7 @@
 use clap::Parser;
 use std::process;
 
+mod console;
 mod daemon;
 
 #[derive(Parser)]
@@ -11,8 +12,7 @@ enum Era {
     Daemon(daemon::Args),
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let args = Era::parse();
 
     let result = match args {
@@ -22,12 +22,7 @@ async fn main() {
     if let Err(err) = &result {
         eprintln!("ERROR: {:#?}", err);
         process::exit(1);
-    } else {
-        // tood make loop cancelable. prob move to daemon, tbh
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        }
-
-        process::exit(0);
     }
+
+    process::exit(0);
 }

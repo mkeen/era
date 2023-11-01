@@ -1,81 +1,90 @@
-use gasket::framework::*;
-use gasket::messaging::tokio::{InputPort, OutputPort};
+use std::time::Duration;
 
-use crate::model::{BlockContext, EnrichedBlockPayload, RawBlockPayload};
-use serde::Deserialize;
+use gasket::runtime::{spawn_stage, WorkOutcome};
 
-#[derive(Deserialize, Clone)]
-pub struct Config {}
+use crate::{
+    bootstrap,
+    model::{self, BlockContext},
+};
 
-impl Config {
-    pub fn bootstrapper(self) -> Stage {
-        Stage {
-            _config: self,
+type InputPort = gasket::messaging::TwoPhaseInputPort<model::RawBlockPayload>;
+type OutputPort = gasket::messaging::OutputPort<model::EnrichedBlockPayload>;
+
+pub struct Bootstrapper {
+    input: InputPort,
+    output: OutputPort,
+}
+
+impl Default for Bootstrapper {
+    fn default() -> Self {
+        Self {
             input: Default::default(),
             output: Default::default(),
-            ops_count: Default::default(),
         }
     }
 }
 
-#[derive(Stage)]
-#[stage(name = "enrich-skip", unit = "RawBlockPayload", worker = "Worker")]
-pub struct Stage {
-    _config: Config,
-
-    pub input: InputPort<RawBlockPayload>,
-    pub output: OutputPort<EnrichedBlockPayload>,
-
-    #[metric]
-    ops_count: gasket::metrics::Counter,
-}
-
-pub struct Worker {}
-
-#[async_trait::async_trait(?Send)]
-impl gasket::framework::Worker<Stage> for Worker {
-    async fn bootstrap(_: &Stage) -> Result<Self, WorkerError> {
-        Ok(Self {})
+impl Bootstrapper {
+    pub fn borrow_input_port(&mut self) -> &'_ mut InputPort {
+        &mut self.input
     }
 
-    async fn schedule(
-        &mut self,
-        stage: &mut Stage,
-    ) -> Result<WorkSchedule<RawBlockPayload>, WorkerError> {
-        let msg = stage.input.recv().await.or_panic()?;
-        Ok(WorkSchedule::Unit(msg.payload))
+    pub fn borrow_output_port(&mut self) -> &'_ mut OutputPort {
+        &mut self.output
     }
 
-    async fn execute(
-        &mut self,
-        unit: &RawBlockPayload,
-        stage: &mut Stage,
-    ) -> Result<(), WorkerError> {
-        match unit {
-            RawBlockPayload::RollForward(cbor) => {
-                stage
-                    .output
-                    .send(EnrichedBlockPayload::roll_forward(
-                        cbor.clone(),
-                        BlockContext::default(),
-                    ))
-                    .await
-                    .unwrap();
-            }
-            RawBlockPayload::RollBack(cbor, last_good_block_info_rollback) => {
-                stage
-                    .output
-                    .send(EnrichedBlockPayload::roll_back(
-                        cbor.clone(),
-                        BlockContext::default(),
-                        last_good_block_info_rollback.clone(),
-                    ))
-                    .await
-                    .unwrap();
-            }
-            RawBlockPayload::RollForwardGenesis => {}
+    pub fn spawn_stages(self, pipeline: &mut bootstrap::Pipeline) {
+        let worker = Worker {
+            input: self.input,
+            output: self.output,
         };
 
-        Ok(())
+        pipeline.register_stage(spawn_stage(
+            worker,
+            gasket::runtime::Policy {
+                tick_timeout: Some(Duration::from_secs(600)),
+                ..Default::default()
+            },
+            Some("enrich-skip"),
+        ));
+    }
+}
+
+pub struct Worker {
+    input: InputPort,
+    output: OutputPort,
+}
+
+impl gasket::runtime::Worker for Worker {
+    fn metrics(&self) -> gasket::metrics::Registry {
+        gasket::metrics::Builder::new().build()
+    }
+
+    fn work(&mut self) -> gasket::runtime::WorkResult {
+        let msg = self.input.recv_or_idle()?;
+
+        match msg.payload {
+            model::RawBlockPayload::RollForward(cbor) => {
+                self.output.send(model::EnrichedBlockPayload::roll_forward(
+                    cbor,
+                    BlockContext::default(),
+                ))?;
+            }
+            model::RawBlockPayload::RollBack(
+                cbor,
+                last_good_block_info_rollback,
+                last_rollback_for_batch,
+            ) => {
+                self.output.send(model::EnrichedBlockPayload::roll_back(
+                    cbor,
+                    BlockContext::default(),
+                    last_good_block_info_rollback,
+                    last_rollback_for_batch,
+                ))?;
+            }
+        };
+
+        self.input.commit();
+        Ok(WorkOutcome::Partial)
     }
 }

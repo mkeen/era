@@ -1,16 +1,6 @@
-# [source]
-# type = "N2N"
-# address = "127.0.0.1:3001"
-# min_depth = 10
-
 [source]
-type = "N2C"
-path = "/tmp/node.socket"
-min_depth = 10
-
-# [source]
-# type = "UTXORPC"
-# address = "https://64.176.196.20:50051"
+type = "N2N"
+address = "127.0.0.1:3001"
 
 [enrich]
 type = "Sled"
@@ -23,40 +13,42 @@ rollback_db_path = "/data/era/rollback_buffer"
 
 [storage]
 type = "Redis"
-connection_params = "redis://127.0.0.1:6379/0"
-cursor_key = "_cursor"
+connection_params = "redis://127.0.0.1:6379/3"
+cursor_key = "_cursor1"
 
 [[reducers]]
-type = "Utxo"
-key_prefix = "tx"
-coin_key_prefix = "c"
-datum_key_prefix = "d"
-
-[[reducers]]
-type = "Metadata"
+type = "AssetMetadata"
 projection = "Json"
-key_prefix = "m"
-royalty_key_prefix = "m.r"
+historical_metadata = true
+policy_asset_index = true
+royalty_metatada = true
 
 [[reducers]]
-type = "AssetsBalances"
-
-[[reducers]]
-type = "Handles"
+type = "AdaHandle"
 key_prefix = "h"
-policy_id = "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a"
+policy_id_hex = "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a"
 
 [[reducers]]
-type = "AssetsLastMoved"
+type = "PolicyAssetsMoved"
 key_prefix = "p"
 
+# This reflects the last block touched.. whether rolling forward or rolling back
 [[reducers]]
 type = "Parameters"
 key_prefix = "pr"
 
 [[reducers]]
-type = "StakeToPool"
-key_prefix = "pl"
+type = "UtxoOwners"
+key_prefix = "tx"
+coin_key_prefix = "c"
+
+[[reducers]]
+type = "UtxoByAddress"
+key_prefix = "tx"
+coin_key_prefix = "c"
+
+[[reducers]]
+type = "MultiAssetBalances"
 
 [intersect]
 type = "Origin"

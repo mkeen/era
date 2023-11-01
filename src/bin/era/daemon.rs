@@ -1,24 +1,18 @@
-use std::sync::Arc;
-
 use clap;
-use era::{
-    crosscut, enrich,
-    pipeline::{self, Context},
-    reducers, sources, storage,
-};
-use gasket::runtime::spawn_stage;
-use pallas::ledger::{configs::byron::from_file, traverse::wellknown::GenesisValues};
+use era::{bootstrap, crosscut, enrich, reducers, sources, storage};
 use serde::Deserialize;
-use tokio::sync::Mutex;
+use std::time::Duration;
 
-#[derive(Deserialize, Clone)]
+use crate::console;
+
+#[derive(Deserialize)]
 #[serde(tag = "type")]
 pub enum ChainConfig {
     Mainnet,
     Testnet,
     PreProd,
     Preview,
-    Custom(GenesisValues),
+    Custom(crosscut::ChainWellKnownInfo),
 }
 
 impl Default for ChainConfig {
@@ -27,13 +21,13 @@ impl Default for ChainConfig {
     }
 }
 
-impl From<ChainConfig> for GenesisValues {
+impl From<ChainConfig> for crosscut::ChainWellKnownInfo {
     fn from(other: ChainConfig) -> Self {
         match other {
-            ChainConfig::Mainnet => GenesisValues::mainnet(),
-            ChainConfig::Testnet => GenesisValues::testnet(),
-            ChainConfig::PreProd => GenesisValues::preprod(),
-            ChainConfig::Preview => GenesisValues::preview(),
+            ChainConfig::Mainnet => crosscut::ChainWellKnownInfo::mainnet(),
+            ChainConfig::Testnet => crosscut::ChainWellKnownInfo::testnet(),
+            ChainConfig::PreProd => crosscut::ChainWellKnownInfo::preprod(),
+            ChainConfig::Preview => crosscut::ChainWellKnownInfo::preview(),
             ChainConfig::Custom(x) => x,
         }
     }
@@ -48,9 +42,8 @@ struct ConfigRoot {
     intersect: crosscut::IntersectConfig,
     finalize: Option<crosscut::FinalizeConfig>,
     chain: Option<ChainConfig>,
-    blocks: Option<crosscut::historic::BlockConfig>,
     policy: Option<crosscut::policies::RuntimePolicy>,
-    genesis: Option<String>,
+    blocks: Option<crosscut::historic::BlockConfig>,
 }
 
 impl ConfigRoot {
@@ -75,40 +68,74 @@ impl ConfigRoot {
     }
 }
 
+fn should_stop(pipeline: &bootstrap::Pipeline) -> bool {
+    pipeline
+        .tethers
+        .iter()
+        .any(|tether| match tether.check_state() {
+            gasket::runtime::TetherState::Alive(x) => match x {
+                gasket::runtime::StageState::StandBy => true,
+                _ => false,
+            },
+            _ => true,
+        })
+}
+
+fn shutdown(pipeline: bootstrap::Pipeline) {
+    for tether in pipeline.tethers {
+        let state = tether.check_state();
+        log::warn!("dismissing stage: {} with state {:?}", tether.name(), state);
+        tether.dismiss_stage().expect("stage stops");
+
+        // Can't join the stage because there's a risk of deadlock, usually
+        // because a stage gets stuck sending into a port which depends on a
+        // different stage not yet dismissed. The solution is to either create a
+        // DAG of dependencies and dismiss in the correct order, or implement a
+        // 2-phase teardown where ports are disconnected and flushed
+        // before joining the stage.
+
+        //tether.join_stage();
+    }
+}
+
 pub fn run(args: &Args) -> Result<(), era::Error> {
+    console::initialize(&args.console);
+
     let config = ConfigRoot::new(&args.config)
         .map_err(|err| era::Error::ConfigError(format!("{:?}", err)))?;
 
-    let chain_config = config.chain.unwrap_or_default();
+    let chain = config.chain.unwrap_or_default().into();
+    let block_config = config.blocks.unwrap_or_default();
+    let blocks = block_config.clone().into();
+    let policy = config.policy.unwrap_or_default().into();
 
-    spawn_stage(
-        pipeline::Pipeline::bootstrap(
-            Arc::new(Mutex::new(Context {
-                chain: chain_config.clone().into(),
-                intersect: config.intersect,
-                finalize: config.finalize,
-                error_policy: config.policy.unwrap_or_default(),
-                block_buffer: config.blocks.unwrap().into(),
-                genesis_file: from_file(std::path::Path::new(&config.genesis.unwrap_or(format!(
-                    "/etc/era/{}-byron-genesis.json",
-                    match chain_config {
-                        ChainConfig::Mainnet => "mainnet",
-                        ChainConfig::Testnet => "testnet",
-                        ChainConfig::PreProd => "preprod",
-                        ChainConfig::Preview => "preview",
-                        _ => "",
-                    }
-                ))))
-                .unwrap(),
-            })),
-            config.source,
-            config.enrich.unwrap_or_default(),
-            config.reducers,
-            config.storage,
-            args.console.clone().unwrap_or_default(),
-        ),
-        Default::default(), // todo dont use default policy
+    let source = config.source.bootstrapper(
+        &chain,
+        &blocks,
+        &config.intersect,
+        &config.finalize,
+        &policy,
     );
+
+    let enrich = config
+        .enrich
+        .unwrap_or_default()
+        .bootstrapper(&policy, &block_config);
+
+    let reducer = reducers::Bootstrapper::new(config.reducers, &chain, &policy);
+
+    let storage = config.storage.plugin(&chain, &config.intersect, &policy);
+
+    let pipeline = bootstrap::build(source, enrich, reducer, storage)?;
+
+    while !should_stop(&pipeline) {
+        console::refresh(&args.console, &pipeline);
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
+    shutdown(pipeline);
+    blocks.close();
+    // todo make sure sled databases get flushed in their cleanup
 
     Ok(())
 }
@@ -122,5 +149,5 @@ pub struct Args {
 
     #[clap(long, value_parser)]
     //#[clap(description = "type of progress to display")],
-    console: Option<pipeline::console::Mode>,
+    console: Option<console::Mode>,
 }

@@ -1,68 +1,57 @@
 pub mod skip;
 pub mod sled;
 
-use std::sync::Arc;
-
+use gasket::messaging::{OutputPort, TwoPhaseInputPort};
 use serde::Deserialize;
 
-use gasket::{
-    messaging::tokio::{InputPort, OutputPort},
-    runtime::Tether,
-};
-use tokio::sync::Mutex;
+use crate::{bootstrap, crosscut, model};
 
-use crate::{model, pipeline};
-
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize)]
 #[serde(tag = "type")]
 pub enum Config {
-    Skip(skip::Config),
+    Skip,
     Sled(sled::Config),
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self::Skip(skip::Config {})
+        Self::Skip
     }
 }
 
 impl Config {
-    pub fn bootstrapper(
-        self,
-        ctx: Arc<Mutex<pipeline::Context>>,
-        rollback_db_path: String,
-    ) -> Option<Bootstrapper> {
-        Some(match self {
-            Config::Skip(w) => Bootstrapper::Skip(w.bootstrapper()),
-            Config::Sled(w) => Bootstrapper::Sled(w.bootstrapper(ctx, rollback_db_path)),
-        })
+    pub fn bootstrapper(self, policy: &crosscut::policies::RuntimePolicy, blocks: &crosscut::historic::BlockConfig) -> Bootstrapper {
+        match self {
+            Config::Skip => Bootstrapper::Skip(skip::Bootstrapper::default()),
+            Config::Sled(c) => Bootstrapper::Sled(c.boostrapper(policy, blocks)),
+        }
     }
 }
 
 pub enum Bootstrapper {
-    Skip(skip::Stage),
-    Sled(sled::Stage),
+    Skip(skip::Bootstrapper),
+    Sled(sled::Bootstrapper),
 }
 
 impl Bootstrapper {
-    pub fn borrow_input_port(&mut self) -> &'_ mut InputPort<model::RawBlockPayload> {
+    pub fn borrow_input_port(&mut self) -> &'_ mut TwoPhaseInputPort<model::RawBlockPayload> {
         match self {
-            Bootstrapper::Skip(s) => &mut s.input,
-            Bootstrapper::Sled(s) => &mut s.input,
+            Bootstrapper::Skip(x) => x.borrow_input_port(),
+            Bootstrapper::Sled(x) => x.borrow_input_port(),
         }
     }
 
     pub fn borrow_output_port(&mut self) -> &'_ mut OutputPort<model::EnrichedBlockPayload> {
         match self {
-            Bootstrapper::Skip(s) => &mut s.output,
-            Bootstrapper::Sled(s) => &mut s.output,
+            Bootstrapper::Skip(x) => x.borrow_output_port(),
+            Bootstrapper::Sled(x) => x.borrow_output_port(),
         }
     }
 
-    pub fn spawn_stage(self, pipeline: &pipeline::Pipeline) -> Tether {
+    pub fn spawn_stages(self, pipeline: &mut bootstrap::Pipeline) {
         match self {
-            Bootstrapper::Skip(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),
-            Bootstrapper::Sled(s) => gasket::runtime::spawn_stage(s, pipeline.policy.clone()),
+            Bootstrapper::Skip(x) => x.spawn_stages(pipeline),
+            Bootstrapper::Sled(x) => x.spawn_stages(pipeline),
         }
     }
 }
